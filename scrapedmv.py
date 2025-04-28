@@ -27,7 +27,7 @@ GECKODRIVER_PATH = os.getenv('GECKODRIVER_PATH','YOUR_GECKODRIVER_PATH_HERE') # 
 YOUR_ADDRESS = os.getenv("YOUR_ADDRESS")
 DISTANCE_RANGE_MILES_STR = os.getenv("DISTANCE_RANGE")
 if os.path.isfile("/app/ncdot_locations_coordinates_only.json"):
-    LOCATION_DATA_FILE = "ncdot_locations_coordinates_only.json"
+    LOCATION_DATA_FILE = "/app/ncdot_locations_coordinates_only.json"
 elif os.path.isfile("ncdot_locations_coordinates_only.json"):
     LOCATION_DATA_FILE = "ncdot_locations_coordinates_only.json"
 else:
