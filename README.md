@@ -7,6 +7,7 @@ It uses selenium to scrape appointment locations, dates, and times, from https:/
 I strongly recommend you set it up yourself, but if you are entirely unwilling to do that ( even though it is quite easy ), you could reach out to me ( tommy092464_62746 on discord, or via github issues ) and pay me like 5 bucks and ill host it for you for however long you need, with absolutely no uptime guarantees ( e.g. if my power, or internet go out, that sucks for you. ). 
 
 If this tool helped you out a lot, consider buying me a coffee:
+
 <a href="https://www.buymeacoffee.com/tommymcelroy" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Coffee" height="41" width="174"></a>
 
 # Setup
