@@ -44,7 +44,7 @@ with your geckodriver path, like this:
 GECKODRIVER_PATH = '/home/tommy/.cache/selenium/geckodriver/linux64/0.35.0/geckodriver' # Replace with your geckodriver path
 ```
 
-Your format will depend on your operating system, e.g. on windows it may be like `GECKODRIVER_PATH = 'C:/Users/tommy/Downloads/0.35.0/geckodriver.exe'` or something like that. 
+Your format will depend on your operating system, e.g. on windows it may be like `GECKODRIVER_PATH = 'C:/Users/tommy/Downloads/0.35.0/geckodriver.exe'` or something like that. if you are on Windows, you will likely be default get a format like C:\Users\tommy\Downloads\0.35.0\geckodriver.exe. you need to replace all of those \ with /, so that it looks like the above example. 
 
 
 Then, you need to go to discord, and create a webhook in a server you own ( make a server if you dont have one )
@@ -61,7 +61,7 @@ with your webhook url, like this:
 YOUR_DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/10920931091/-JAOIFJWjenirieojOAJOIWjonfrreywoijojwojoOIAJODAab3" # !!! REPLACE WITH YOUR ACTUAL WEBHOOK URL !!!
 ```
 
-( that is not a real webhook url to be clear ) 
+( that is not a real webhook url to be clear ) ( do notice the quotes around the webhook URL, those are necessary. )
 
 Then, you just run `python3 scrapedmv.py`, and every 5 minutes or so it will start the scraping process. That is all you have to do to get it up and running!
 
