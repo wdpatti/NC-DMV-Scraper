@@ -6,6 +6,8 @@ It uses selenium to scrape appointment locations, dates, and times, from https:/
 
 I strongly recommend you set it up yourself, but if you are entirely unwilling to do that ( even though it is quite easy ), you could reach out to me ( tommy092464_62746 on discord, or via github issues ) and pay me like 5 bucks and ill host it for you for however long you need, with absolutely no uptime guarantees ( e.g. if my power, or internet go out, that sucks for you. ). 
 
+If this tool helped you out a lot, perhaps consider buying me a coffee: [Buy Me A Coffee](https://buymeacoffee.com/tommymcelroy)
+
 # Setup
 
 In order to set it up, you must first install Firefox, python, selenium, and the selenium geckodriver
