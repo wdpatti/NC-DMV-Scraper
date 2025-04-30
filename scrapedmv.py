@@ -313,7 +313,7 @@ def extract_times_for_all_locations_firefox(url, driver_path, binary_path,
             driver.implicitly_wait(5)
         except Exception as e:
             if "unable to find binary" in e:
-                print("Selenium is unable to find your firefox install, please try setting a FIREFOX_BINARY_PATH in the configuration options at the top of scrapedmv.py, or in the environment variables.")
+                print("Selenium is unable to find your firefox install, please make sure you have firefox installed, and if you do, try setting a FIREFOX_BINARY_PATH in the configuration options at the top of scrapedmv.py, or in the environment variables.")
                 exit()
             print(e)
             exit()
