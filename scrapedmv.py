@@ -67,6 +67,8 @@ MAX_DISCORD_MESSAGE_LENGTH = 1950 # Slightly less than 2000 for safety margin
 
 # dont need to set this unless you get error
 FIREFOX_BINARY_PATH = os.getenv("FIREFOX_BINARY_PATH")
+if not FIREFOX_BINARY_PATH and os.path.isfile("C:/Program Files/Mozilla Firefox/firefox.exe"):
+    FIREFOX_BINARY_PATH = "C:/Program Files/Mozilla Firefox/firefox.exe"
 
 # --- End Configuration ---
 
@@ -306,8 +308,15 @@ def extract_times_for_all_locations_firefox(url, driver_path, binary_path,
         if binary_path:
             firefox_options.binary_location = binary_path
         service = FirefoxService(executable_path=driver_path)
-        driver = webdriver.Firefox(service=service, options=firefox_options)
-        driver.implicitly_wait(5)
+        try: 
+            driver = webdriver.Firefox(service=service, options=firefox_options)
+            driver.implicitly_wait(5)
+        except Exception as e:
+            if "unable to find binary" in e:
+                print("Selenium is unable to find your firefox install, please try setting a FIREFOX_BINARY_PATH in the configuration options at the top of scrapedmv.py, or in the environment variables.")
+                exit()
+            print(e)
+            exit()
 
         driver.get(url)
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Navigated to:", url)
