@@ -64,6 +64,10 @@ MAX_RANDOM_DELAY_SECONDS = 30
 NCDOT_APPOINTMENT_URL = "https://skiptheline.ncdot.gov"
 MAX_DISCORD_MESSAGE_LENGTH = 1950 # Slightly less than 2000 for safety margin
 
+
+# dont need to set this unless you get error
+FIREFOX_BINARY_PATH = os.getenv("FIREFOX_BINARY_PATH")
+
 # --- End Configuration ---
 
 def parse_datetime_filters(start_date_str, end_date_str, relative_range_str, start_time_str, end_time_str):
@@ -289,7 +293,7 @@ def format_results_for_discord(raw_results):
     return "\n".join(message_lines)
 
 
-def extract_times_for_all_locations_firefox(url, driver_path, 
+def extract_times_for_all_locations_firefox(url, driver_path, binary_path,
                                             allowed_locations_filter, filtering_active,
                                             date_filter_enabled, start_date, end_date, 
                                             time_filter_enabled, start_time, end_time):
@@ -299,6 +303,8 @@ def extract_times_for_all_locations_firefox(url, driver_path,
         firefox_options = Options()
         firefox_options.set_preference("geo.enabled", False)
         firefox_options.add_argument("--headless")
+        if binary_path:
+            firefox_options.binary_location = binary_path
         service = FirefoxService(executable_path=driver_path)
         driver = webdriver.Firefox(service=service, options=firefox_options)
         driver.implicitly_wait(5)
@@ -502,6 +508,7 @@ while True:
     results = extract_times_for_all_locations_firefox(
         NCDOT_APPOINTMENT_URL,
         GECKODRIVER_PATH,
+        FIREFOX_BINARY_PATH,
         allowed_locations, # Distance filter
         filtering_enabled, # Distance filter flag
         date_filter,       # Date filter flag
