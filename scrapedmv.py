@@ -68,6 +68,7 @@ MAX_DISCORD_MESSAGE_LENGTH = 1950 # Slightly less than 2000 for safety margin
 # if you want it to notify you even when there are no appointments available, then set this to true
 PROOF_OF_LIFE = os.getenv("PROOF_OF_LIFE", False)
 
+INTRO_MESSAGE = os.getenv("INTRO_MESSAGE", f"@everyone Appointments available at {NCDOT_APPOINTMENT_URL}:\n")
 
 # dont need to set this unless you get error
 FIREFOX_BINARY_PATH = os.getenv("FIREFOX_BINARY_PATH")
@@ -221,8 +222,8 @@ def send_discord_notification(webhook_url, message_content):
     elif message_content == None:
         return
 
-    intro_message = f"@everyone Appointments available at {NCDOT_APPOINTMENT_URL}:\n"
-    full_message = intro_message + message_content
+    # intro_message = f"@everyone Appointments available at {NCDOT_APPOINTMENT_URL}:\n"
+    full_message = INTRO_MESSAGE + message_content
 
     message_chunks = []
     remaining_message = full_message
