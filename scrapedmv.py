@@ -33,8 +33,8 @@ elif os.path.isfile("ncdot_locations_coordinates_only.json"):
 else:
     print("Location data file not set, please set one")
 
-# APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Driver License - First Time")
-APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Motorcycle Skills Test")
+APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Driver License - First Time")
+# APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Motorcycle Skills Test")
 # APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Legal Presence")
 # You could also define:
 # APPOINTMENT_TYPE = "Permits"
@@ -64,6 +64,9 @@ MIN_RANDOM_DELAY_SECONDS = 10
 MAX_RANDOM_DELAY_SECONDS = 30
 NCDOT_APPOINTMENT_URL = "https://skiptheline.ncdot.gov"
 MAX_DISCORD_MESSAGE_LENGTH = 1950 # Slightly less than 2000 for safety margin
+
+# if you want it to notify you even when there are no appointments available, then set this to true
+PROOF_OF_LIFE = os.getenv("PROOF_OF_LIFE", False)
 
 
 # dont need to set this unless you get error
@@ -212,6 +215,12 @@ def send_discord_notification(webhook_url, message_content):
         print("Discord webhook URL not configured. Skipping notification.")
         return
 
+    if message_content == None and PROOF_OF_LIFE == True:
+        requests.post(webhook_url, json={"content":"No valid appointments found at this time"}, timeout=10)
+        return
+    elif message_content == None:
+        return
+
     intro_message = f"@everyone Appointments available at {NCDOT_APPOINTMENT_URL}:\n"
     full_message = intro_message + message_content
 
@@ -319,6 +328,7 @@ def extract_times_for_all_locations_firefox(
     try:
         print(f"[{start_run_time_str}] Starting Firefox setup...")
         firefox_options = Options()
+        firefox_options.add_argument("--headless")
         firefox_options.set_preference("geo.enabled", False)
         if binary_path:
             firefox_options.binary_location = binary_path
@@ -640,6 +650,7 @@ while True:
         print("Valid appointment times found. Sending notification...")
         send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, discord_message_content)
     else:
+        send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, None)
         print("No valid appointment times found in this run.")
 
     base_sleep = BASE_INTERVAL_MINUTES * 60
