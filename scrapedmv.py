@@ -33,8 +33,9 @@ elif os.path.isfile("ncdot_locations_coordinates_only.json"):
 else:
     print("Location data file not set, please set one")
 
-APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Driver License - First Time")
-# APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Motorcycle Skills Test")
+# APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Driver License - First Time")
+APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Motorcycle Skills Test")
+# APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Legal Presence")
 # You could also define:
 # APPOINTMENT_TYPE = "Permits"
 # APPOINTMENT_TYPE = "Teen Driver Level 1"
@@ -86,31 +87,24 @@ def parse_datetime_filters(start_date_str, end_date_str, relative_range_str, sta
             relative_range_str = relative_range_str.lower().strip()
             num = int(relative_range_str[:-1])
             unit = relative_range_str[-1]
-            
             if num <= 0:
                 raise ValueError("DATE_RANGE number must be positive.")
-            
             start_date = today
-            
             if unit == 'd':
                 end_date = today + timedelta(days=num)
             elif unit == 'w':
                 end_date = today + timedelta(weeks=num)
             elif unit == 'm':
                 current_year, current_month, current_day = today.year, today.month, today.day
-                
                 # Calculate target month and year
                 total_months_offset = current_month + num
                 year_offset = (total_months_offset - 1) // 12
                 target_year = current_year + year_offset
                 target_month = (total_months_offset - 1) % 12 + 1
-                
                 # Get max days in target month
                 _, days_in_target_month = calendar.monthrange(target_year, target_month)
-                
                 # Adjust day if current day is invalid for target month
                 target_day = min(current_day, days_in_target_month)
-                
                 end_date = date(target_year, target_month, target_day)
             else:
                 raise ValueError(f"Invalid DATE_RANGE unit: '{unit}'. Use 'd', 'w', or 'm'.")
@@ -184,10 +178,9 @@ def get_filtered_locations(your_address, distance_range_str, location_file):
     for item in locations_data:
         try:
             location_address = item["address"] 
-            location_coords = item["coordinates"] 
+            location_coords = item["coordinates"]
             if len(location_coords) != 2:
-                 raise ValueError("Invalid coordinates format")
-            
+                raise ValueError("Invalid coordinates format")
             dist = geopy_distance(user_coords, tuple(location_coords)).miles
             if Decimal(dist) <= distance_range_miles:
                 allowed_locations.add(location_address)
@@ -294,210 +287,323 @@ def format_results_for_discord(raw_results):
 
     return "\n".join(message_lines)
 
+def parse_datetime_for_sort(datetime_str):
+    try:
+        return datetime.strptime(datetime_str, "%m/%d/%Y %I:%M:%S %p")
+    except ValueError:
+        return datetime.max
 
-def extract_times_for_all_locations_firefox(url, driver_path, binary_path,
-                                            allowed_locations_filter, filtering_active,
-                                            date_filter_enabled, start_date, end_date, 
-                                            time_filter_enabled, start_time, end_time):
+def wait_for_options_in_select(driver, locator, timeout=35):
+    start_wait = time.time()
+    while time.time() - start_wait < timeout:
+        try:
+            select_element = driver.find_element(*locator)
+            options = select_element.find_elements(By.TAG_NAME, "option")
+            if len(options) > 1:
+                return select_element
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return None
+
+def extract_times_for_all_locations_firefox(
+    url, driver_path, binary_path,
+    allowed_locations_filter, filtering_active,
+    date_filter_enabled, start_date, end_date,
+    time_filter_enabled, start_time, end_time
+):
     driver = None
     raw_location_results = {}
+    start_run_time_str = time.strftime('%Y-%m-%d %H:%M:%S')
+
     try:
+        print(f"[{start_run_time_str}] Starting Firefox setup...")
         firefox_options = Options()
         firefox_options.set_preference("geo.enabled", False)
-        firefox_options.add_argument("--headless")
         if binary_path:
             firefox_options.binary_location = binary_path
         service = FirefoxService(executable_path=driver_path)
-        try: 
-            driver = webdriver.Firefox(service=service, options=firefox_options)
-            driver.implicitly_wait(5)
-        except Exception as e:
-            if "unable to find binary" in e:
-                print("Selenium is unable to find your firefox install, please make sure you have firefox installed, and if you do, try setting a FIREFOX_BINARY_PATH in the configuration options at the top of scrapedmv.py, or in the environment variables.")
-                exit()
-            print(e)
-            exit()
 
-        driver.get(url)
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Navigated to:", url)
-
-        make_appointment_button = WebDriverWait(driver, 90).until(
-            EC.presence_of_element_located((By.ID, "cmdMakeAppt"))
-        )
-        print("Found 'Make an Appointment' button.")
-        make_appointment_button.click()
-        print("Clicked 'Make an Appointment' button.")
-
-        # first_layer_button_xpath = "//div[contains(@class, 'QflowObjectItem') and contains(@class, 'form-control') and contains(@class, 'ui-selectable') and contains(@class, 'valid') and .//div[contains(text(), 'Driver License - First Time')]]"
-        first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
-        time.sleep(2)
-        first_layer_button = WebDriverWait(driver, 50).until(
-            EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
-        )
-        print(f"Found '{APPOINTMENT_TYPE}' button (First Layer).")
-        first_layer_button.click()
-        print(f"Clicked '{APPOINTMENT_TYPE}' button (First Layer).")
-
-        wait = WebDriverWait(driver, 85)
-        second_layer_button_selector = "div.QflowObjectItem.form-control.ui-selectable.valid:not(.disabled-unit):not(:has(> div.hover-div))"
         try:
-            wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
+            driver = webdriver.Firefox(service=service, options=firefox_options)
+            driver.implicitly_wait(2)
+            driver.set_page_load_timeout(90)
+            print("Firefox driver initialized.")
         except Exception as e:
-            print("No appointment buttons found")
-            print(e)
+            error_msg = str(e).lower()
+            if "unable to find binary" in error_msg or \
+               ("message: process unexpectedly closed" in error_msg and binary_path):
+                 print("ERROR: Selenium couldn't find your Firefox installation.")
+                 print("Please ensure Firefox is installed or FIREFOX_BINARY_PATH is set.")
+            else:
+                 print(f"ERROR: Failed to initialize Firefox driver: {e}")
             return {}
 
-        print("Second layer location buttons are now present (using refined selector).")
+        print(f"Navigating to URL: {url}")
+        driver.get(url)
+        print("Page loaded.")
 
-        for index in range(100):
+        try:
+            make_appointment_button = WebDriverWait(driver, 90).until(
+                EC.presence_of_element_located((By.ID, "cmdMakeAppt"))
+            )
+            print("Found 'Make an Appointment' button.")
+            make_appointment_button.click()
+            print("Clicked 'Make an Appointment' button.")
+        except Exception as e:
+            print(f"ERROR: Could not find or click 'Make an Appointment' button: {e}. Stopping.")
+            if driver: driver.quit()
+            return {}
+
+        try:
+            first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
+            time.sleep(2)
+            first_layer_button = WebDriverWait(driver, 50).until(
+                EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
+            )
+            print(f"Found '{APPOINTMENT_TYPE}' button.")
+            first_layer_button.click()
+            print(f"Clicked '{APPOINTMENT_TYPE}' button.")
+        except Exception as e:
+            print(f"ERROR: Could not find or click '{APPOINTMENT_TYPE}' button: {e}. Stopping.")
+            if driver:
+                driver.quit()
+            return {}
+
+        location_button_wait = WebDriverWait(driver, 45)
+        second_layer_button_selector = "div.QflowObjectItem.form-control.ui-selectable.valid:not(.disabled-unit):not(:has(> div.hover-div))"
+
+        try:
+            print("Waiting for location buttons...")
+            location_button_wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
+            print("Location buttons are present.")
+        except Exception as e:
+            print(f"ERROR: No location buttons found after clicking appointment type: {e}. Stopping.")
+            if driver: driver.quit()
+            return {}
+
+        initial_buttons = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
+        num_initial_buttons = len(initial_buttons)
+        print(f"Found {num_initial_buttons} potential location buttons.")
+
+        for index in range(num_initial_buttons):
+            location_name = f"Unknown Location {index}"
+            location_address_from_site = "Unknown Address"
+            location_processed_successfully = False
+
             try:
+                print(raw_location_results)
+                print(f"\n--- Processing location index: {index} ---")
+                WebDriverWait(driver, 15).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
                 location_button_elements = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
-                active_location_buttons_list = [button for button in location_button_elements if button.is_displayed() and button.is_enabled()]
+                active_location_buttons_list = []
+                for btn in location_button_elements:
+                    try:
+                         if btn.is_displayed() and btn.is_enabled():
+                             active_location_buttons_list.append(btn)
+                    except Exception:
+                         print(f"Warning: Issue checking state of a button for index {index}, list may be incomplete.")
+                         continue
 
                 if index >= len(active_location_buttons_list):
-                    print(f"Index {index} is out of range (list size: {len(active_location_buttons_list)}). Finished processing locations for this run.")
-                    break
+                    print(f"Index {index} out of bounds ({len(active_location_buttons_list)} active). Skipping.")
+                    continue
 
                 current_button = active_location_buttons_list[index]
-                button_lines = current_button.text.splitlines()
-                location_name = button_lines[0].strip() if button_lines else f"Unknown Location {index}"
 
-                location_address_from_site = ""
                 try:
+                    button_lines = current_button.text.splitlines()
+                    if button_lines:
+                        location_name = button_lines[0].strip()
                     address_element = current_button.find_element(By.CSS_SELECTOR, "div.form-control-child")
                     location_address_from_site = address_element.text.strip()
+                    print(f"Location: {location_name} ({location_address_from_site})")
                 except Exception as e:
-                    print(f"Warning: Failed to get address for {location_name}: {e}. Skipping.")
-                    continue
-                
+                    print(f"Warning: Could not get name/address for index {index}: {e}")
+
                 if filtering_active and location_address_from_site not in allowed_locations_filter:
-                    print(f"Skipping location: {location_name} ({location_address_from_site}) (Not in allowed address list, because of filtering)")
-                    continue 
+                    print(f"Skipping {location_name} (Address '{location_address_from_site}' not in allow list)")
+                    continue
 
-                print(f"\n--- Processing location: {location_name} ({location_address_from_site}) (Index: {index}) ---")
-                print("Clicking location button:", location_name)
+                print(f"Clicking button for: {location_name}")
                 current_button.click()
+                location_processed_successfully = True
+                time.sleep(5)
 
-                time_slot_container_selector = "div.step-control-content.AppointmentTime.TimeSlotModel.TimeSlotDataControl"
-                time_slot_container = WebDriverWait(driver, 55).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, time_slot_container_selector))
-                )
+                valid_appointment_datetimes_for_location = []
+                location_status_message = ""
+                process_dates = True
 
-                time_select_id = "6f1a7b21-2558-41bb-8e4d-2cba7a8b1608"
-                time_select_locator = (By.ID, time_select_id)
+                datepicker_table_selector_css = "table.ui-datepicker-calendar"
+                error_locator_id = "547650da-008d-4fd0-a164-31a44e94"
+                overlay_selector_css = "div.blockUI.blockOverlay"
 
-                options_loaded = False
-                skip_extraction = False
                 try:
-                    select_present_wait = WebDriverWait(driver, 15)
-                    time_select_element = select_present_wait.until(EC.presence_of_element_located(time_select_locator))
-
-                    if not time_select_element.is_enabled():
-                        print("Time select dropdown is DISABLED.")
-                        raw_location_results[location_name] = "Dropdown Disabled"
-                        skip_extraction = True
-                    else:
-                        options_loaded_wait = WebDriverWait(driver, 55)
-                        try:
-                            options_loaded_wait.until(options_loaded_in_select(time_select_locator))
-                            print("Confirmed: Options loaded.")
-                            options_loaded = True
-                        except TimeoutException:
-                            print("Timeout: Options did not load or remained as placeholder only.")
-
-                except TimeoutException:
-                    print("Timeout: Could not find the select dropdown element.")
-                    raw_location_results[location_name] = "Select Element Not Found"
-                    skip_extraction = True
-
-                if not skip_extraction:
-                    valid_appointment_datetimes = []
-                    options_processed_count = 0
+                    print("Waiting for datepicker...")
+                    WebDriverWait(driver, 30).until(
+                        EC.visibility_of_element_located((By.CSS_SELECTOR, datepicker_table_selector_css))
+                    )
+                    print("Datepicker visible.")
                     try:
-                        time_select_element = driver.find_element(*time_select_locator)
-                        time_options = time_select_element.find_elements(By.TAG_NAME, "option")
-
-                        try:
-                            for option_index, option in enumerate(time_options[1:]):
-                                datetime_str = option.get_attribute("data-datetime")
-                                if datetime_str:
-                                    try:
-                                        parse_format = "%m/%d/%Y %I:%M:%S %p" 
-                                        appointment_dt = datetime.strptime(datetime_str, parse_format)
-                                        appointment_date = appointment_dt.date()
-                                        appointment_time = appointment_dt.time()
-
-                                        if date_filter_enabled:
-                                            if not (start_date <= appointment_date <= end_date):
-                                                print(f"Debug: Skipping {datetime_str} - date out of range")
-                                                continue
-                                        
-                                        if time_filter_enabled:
-                                            if not (start_time <= appointment_time <= end_time):
-                                                print(f"Debug: Skipping {datetime_str} - time out of range")
-                                                continue
-
-                                    except Exception as dt_parse_e:
-                                        print(f"Warning: Could not parse or filter datetime '{datetime_str}': {dt_parse_e}")
-                                        continue 
-                                    
-                                    valid_appointment_datetimes.append(datetime_str)
-                                    options_processed_count += 1
-                        except StaleElementReferenceException:
-                            print(f"StaleElementReferenceException occurred while iterating options after processing {options_processed_count}. Storing partial results.")
-
-                        if valid_appointment_datetimes:
-                            print(f"Successfully extracted {len(valid_appointment_datetimes)} valid date/times.")
-                            raw_location_results[location_name] = valid_appointment_datetimes
-                        else:
-                            if options_loaded:
-                                print("No valid appointment times extracted (options existed but lacked data-datetime or were out of set range).")
-                            else:
-                                print("No appointment times found (options did not load).")
-                            raw_location_results[location_name] = []
-
+                        error_element = driver.find_element(By.ID, error_locator_id)
+                        error_html = error_element.get_attribute('innerHTML')
+                        if "does not currently have any appointments available" in error_html:
+                            print("Message: No appointments available in next 90 days.")
+                            location_status_message = "No appointments in next 90 days"
+                            process_dates = False
                     except NoSuchElementException:
-                         print("Error: Select element disappeared before time extraction.")
-                         raw_location_results[location_name] = "Select Element Disappeared"
+                        pass
+                    except Exception as e:
+                        print(f"Warning checking 90-day error msg: {e}")
 
-                driver.back()
-                time.sleep(0.5)
-                wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
+                except Exception as e:
+                    print(f"Did not find datepicker or error occurred: {e}")
+                    location_status_message = "Datepicker Not Found"
+                    process_dates = False
 
+                if process_dates:
+                    print("Processing available dates...")
+                    clickable_dates_selector_css = "td[data-handler='selectDay']:not(.ui-datepicker-unselectable):not(.ui-state-disabled) a.ui-state-default"
+                    time_select_locator = (By.ID, "6f1a7b21-2558-41bb-8e4d-2cba7a8b1608")
 
-            except StaleElementReferenceException:
-                print(f"StaleElementReferenceException caught in main loop for index {index}. Retrying...")
-                try:
-                    current_url_check = driver.current_url
-                    if NCDOT_APPOINTMENT_URL not in current_url_check:
-                         driver.back()
-                         WebDriverWait(driver, 25).until(lambda d: d.current_url != current_url_check)
-                except: pass 
-                time.sleep(1)
-                continue
+                    try:
+                        WebDriverWait(driver,10).until(EC.presence_of_element_located((By.CSS_SELECTOR, datepicker_table_selector_css)))
+                        date_elements = driver.find_elements(By.CSS_SELECTOR, clickable_dates_selector_css)
+                        num_dates = len(date_elements)
+                        print(f"Found {num_dates} clickable dates.")
+
+                        if num_dates == 0 and not location_status_message:
+                            location_status_message = "No clickable dates found"
+
+                        for date_index in range(num_dates):
+                            processed_date = False
+                            try:
+                                current_date_links = driver.find_elements(By.CSS_SELECTOR, clickable_dates_selector_css)
+                                if date_index >= len(current_date_links):
+                                    print(f"Date index {date_index} out of bounds on re-find. Skipping remaining.")
+                                    break
+
+                                date_link_element = current_date_links[date_index]
+                                date_day_text = date_link_element.text
+                                print(f"    Processing Date Index {date_index} (Day: '{date_day_text}')...", end="")
+
+                                overlay_wait_start = time.time()
+                                max_overlay_wait = 15
+                                overlay_timed_out = False
+                                while True:
+                                    try:
+                                        overlay = driver.find_element(By.CSS_SELECTOR, overlay_selector_css)
+                                        if overlay.is_displayed():
+                                            if time.time() - overlay_wait_start > max_overlay_wait:
+                                                print(" Overlay still visible after timeout.", end="")
+                                                overlay_timed_out = True
+                                                break
+                                            time.sleep(0.5)
+                                        else:
+                                            break
+                                    except NoSuchElementException:
+                                        break
+                                    except Exception as e_overlay_check:
+                                        print(f" Error checking overlay: {e_overlay_check}", end="")
+                                        break
+
+                                if overlay_timed_out:
+                                    print(" Skipping date click due to persistent overlay.")
+                                    continue
+
+                                date_link_element.click()
+
+                                time_select_element = wait_for_options_in_select(driver, time_select_locator, timeout=25)
+
+                                if time_select_element:
+                                    time_options = time_select_element.find_elements(By.TAG_NAME, "option")
+                                    times_found_this_date = 0
+                                    for option in time_options[1:]:
+                                        try:
+                                            datetime_str = option.get_attribute("data-datetime")
+                                            if not datetime_str:
+                                                continue
+
+                                            appointment_dt = datetime.strptime(datetime_str, "%m/%d/%Y %I:%M:%S %p")
+                                            appointment_date = appointment_dt.date()
+                                            appointment_time = appointment_dt.time()
+
+                                            date_ok = not date_filter_enabled or (start_date <= appointment_date <= end_date)
+                                            time_ok = not time_filter_enabled or (start_time <= appointment_time <= end_time)
+
+                                            if date_ok and time_ok:
+                                                valid_appointment_datetimes_for_location.append(datetime_str)
+                                                times_found_this_date += 1
+                                        except Exception:
+                                            pass
+                                    if times_found_this_date > 0:
+                                        print(f" Added {times_found_this_date} time(s).")
+                                        processed_date = True
+                                    else:
+                                         print(" No matching times found.")
+                                else:
+                                     print(" Time options did not load.")
+
+                            except Exception as e_date:
+                                if not processed_date: 
+                                     print(f" Error processing date index {date_index} (Day '{date_day_text}'): {e_date}")
+
+                    except Exception as e_find_dates:
+                        print(f"  Error finding or looping through date elements: {e_find_dates}")
+                        if not location_status_message:
+                            location_status_message = "Error processing dates"
+
+                if valid_appointment_datetimes_for_location:
+                    try:
+                        valid_appointment_datetimes_for_location.sort(key=parse_datetime_for_sort)
+                    except Exception as e_sort:
+                         print(f"  Warning: Could not sort times for {location_name}: {e_sort}")
+                    raw_location_results[location_name] = valid_appointment_datetimes_for_location
+                elif location_status_message:
+                    raw_location_results[location_name] = location_status_message
+                else:
+                    raw_location_results[location_name] = []
+
             except Exception as location_e:
-                print(f"Error processing location index {index} ({location_name}): {location_e}")
-                raw_location_results[location_name] = "Error processing location"
-                try:
-                    current_url = driver.current_url
-                    driver.back()
-                    time.sleep(1)
-                    WebDriverWait(driver, 25).until(lambda d: d.current_url != current_url)
-                    print("Navigated back after error.")
-                    wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
-                except:
-                    print("Error navigating back after location processing error. Stopping run.")
-                    break
+                print(f"!! ERROR processing location index {index} ({location_name}): {location_e}")
+                raw_location_results[location_name] = f"Error processing location: {type(location_e).__name__}"
 
+            finally:
+                if location_processed_successfully:
+                    try:
+                        print("Navigating back to location list...")
+                        driver.back()
+                        time.sleep(2.0)
+                        print("Waiting for location buttons...")
+                        WebDriverWait(driver, 25).until(
+                             EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector))
+                        )
+                        print("Location buttons present for next iteration.")
+                        time.sleep(0.5)
+                    except Exception as back_wait_e:
+                         print(f"WARNING: Issue navigating back or waiting for buttons after location index {index}: {back_wait_e}. Trying next location.")
+
+
+        print("\nFinished processing locations loop.")
 
     except Exception as e:
-        print(f"An error occurred during WebDriver execution: {e}")
+        print(f"\n--- !!! ---")
+        print(f"An MAJOR unhandled error occurred outside the location loop: {type(e).__name__} - {e}")
+        print(f"--- !!! ---\n")
+
     finally:
         if driver:
-            driver.quit()
-            print("WebDriver closed.")
+            try:
+                driver.quit()
+                print("Firefox driver quit.")
+            except Exception as e:
+                print(f"Error quitting driver: {e}")
+        else:
+            print("No active driver to quit.")
 
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Extraction process finished.")
     return raw_location_results
+
 
 
 allowed_locations, filtering_enabled = get_filtered_locations(YOUR_ADDRESS, DISTANCE_RANGE_MILES_STR, LOCATION_DATA_FILE)
