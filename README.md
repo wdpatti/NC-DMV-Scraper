@@ -10,7 +10,9 @@ If this tool helped you out a lot, consider buying me a coffee:
 
 <a href="https://www.buymeacoffee.com/tommymcelroy" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Coffee" height="41" width="174"></a>
 
-# Setup
+# Setup ( Native, no Docker ) 
+
+If you have never heard of docker, then this is the tutorial you follow to set up the tool:
 
 In order to set it up, you must first install Firefox, python, selenium, and the selenium geckodriver
 
@@ -157,9 +159,36 @@ TIME_RANGE_END_STR = "19:00"
 
 to only show appointments from 3:00AM to 7:00PM.
 
-#### If you wish to run via Docker, you can do that as well:
+You can also edit the intro message, by default it is:
+"@everyone Appointments available at https://skiptheline.ncdot.gov:\n"
+but you can change it by editing the file ( or by environment variables ) via this line:
 
-Run a pre-built image
+```python
+INTRO_MESSAGE = os.getenv("INTRO_MESSAGE", f"@everyone Appointments available at {NCDOT_APPOINTMENT_URL}:\n")
+```
+
+This allows you to, for example, remove the @everyone ping.
+
+```
+INTRO_MESSAGE = f"Appointments available at {NCDOT_APPOINTMENT_URL}:\n"
+```
+
+You can also make it notify you after it runs even when appointments arent available, if that gives you peace of mind to make sure the script is still running, by editing this line ( or via environment variables ):
+
+```python
+PROOF_OF_LIFE = os.getenv("PROOF_OF_LIFE", False)
+```
+
+if you set it to true, it will notify you after each run
+
+
+```python
+PROOF_OF_LIFE = True
+```
+
+# Docker
+
+In order to run a pre-built image
 ```bash
 docker run -e YOUR_DISCORD_WEBHOOK_URL="PUT_YOUR_WEBHOOK_URL_HERE" ghcr.io/tmcelroy2202/nc-dmv-scraper:latest
 ```
@@ -170,7 +199,7 @@ To run via docker with custom filtering arguments, you would do, for example:
 docker run -e YOUR_DISCORD_WEBHOOK_URL="PUT_YOUR_WEBHOOK_URL_HERE" -e YOUR_ADDRESS="1337 Testing Lane, Charlotte NC" -e DISTANCE_RANGE=50 -e DATE_RANGE_START="03/23/2025" -e DATE_RANGE_END="09/23/2025" -e TIME_RANGE_START="8:00" -e TIME_RANGE_END="9:00" ghcr.io/tmcelroy2202/nc-dmv-scraper:latest
 ```
 
-or, if you wish to build the docker container locally:
+or, if you wish to build the docker container locally, clone the repo, cd into it, and:
 
 Docker build
 
