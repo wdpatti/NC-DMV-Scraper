@@ -69,7 +69,7 @@ YOUR_DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/10920931091/-JAOIFJ
 
 ( that is not a real webhook url to be clear ) ( do notice the quotes around the webhook URL, those are necessary. )
 
-Then, you just run `python3 scrapedmv.py`, and every 5 minutes or so it will start the scraping process. That is all you have to do to get it up and running!
+Then, you just run `python3 scrapedmv.py`, and every 10 minutes or so it will start the scraping process. That is all you have to do to get it up and running!
 
 # Appointment type
 You can choose the type of appointment by editing scrapedmv.py on the line where it says 
