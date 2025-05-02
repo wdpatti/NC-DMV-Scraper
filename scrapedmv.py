@@ -66,7 +66,10 @@ NCDOT_APPOINTMENT_URL = "https://skiptheline.ncdot.gov"
 MAX_DISCORD_MESSAGE_LENGTH = 1950 # Slightly less than 2000 for safety margin
 
 # if you want it to notify you even when there are no appointments available, then set this to true
-PROOF_OF_LIFE = os.getenv("PROOF_OF_LIFE", False)
+PROOF_OF_LIFE = False
+
+if os.getenv("PROOF_OF_LIFE") == "True" or os.getenv("PROOF_OF_LIFE") == True:
+    PROOF_OF_LIFE = True
 
 INTRO_MESSAGE = os.getenv("INTRO_MESSAGE", f"@everyone Appointments available at {NCDOT_APPOINTMENT_URL}:\n")
 
