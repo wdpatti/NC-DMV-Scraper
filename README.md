@@ -246,4 +246,4 @@ services:
 
 # Beta
 
-I have written a purely requests based version of this scraper, which does not require selenium, but it also has not gotten extensive testing yet. If you want to try it out, have a look at #15, and have a look at beta_requests_scrape.py.
+I have written a purely requests based version of this scraper, which does not require selenium, but it also has not gotten extensive testing yet. If you want to try it out, have a look at https://github.com/tmcelroy2202/NC-DMV-Scraper/issues/15, and have a look at beta_requests_scrape.py.
