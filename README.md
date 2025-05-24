@@ -243,3 +243,7 @@ services:
       # TIME_RANGE_END: "19:00"
     restart: unless-stopped
 ```
+
+# Beta
+
+I have written a purely requests based version of this scraper, which does not require selenium, but it also has not gotten extensive testing yet. If you want to try it out, have a look at #15, and have a look at beta_requests_scrape.py.
