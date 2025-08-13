@@ -21,6 +21,10 @@ import calendar
 YOUR_DISCORD_WEBHOOK_URL = os.getenv("YOUR_DISCORD_WEBHOOK_URL", "YOUR_WEBHOOK_URL_HERE") # !!! REPLACE WITH YOUR ACTUAL WEBHOOK URL !!!
 GECKODRIVER_PATH = os.getenv('GECKODRIVER_PATH','YOUR_GECKODRIVER_PATH_HERE') # Replace with your geckodriver path
 
+SIGNAL_NUMBER = os.getenv("SIGNAL_NUMBER") # Replace with your Signal number
+SIGNAL_GROUP = os.getenv("SIGNAL_GROUP") # Replace with your Signal group ID
+
+
 # Can change address via environment values or manually edit this code 
 # YOUR_ADDRESS = "1226 Testing Avenue, Charlotte, NC"
 # DISTANCE_RANGE_MILES_STR = 25
@@ -71,7 +75,7 @@ PROOF_OF_LIFE = False
 if os.getenv("PROOF_OF_LIFE") == "True" or os.getenv("PROOF_OF_LIFE") == True:
     PROOF_OF_LIFE = True
 
-INTRO_MESSAGE = os.getenv("INTRO_MESSAGE", f"@everyone Appointments available at {NCDOT_APPOINTMENT_URL}:\n")
+INTRO_MESSAGE = os.getenv("INTRO_MESSAGE", f"Appointments available at {NCDOT_APPOINTMENT_URL}:\n")
 
 # dont need to set this unless you get error
 FIREFOX_BINARY_PATH = os.getenv("FIREFOX_BINARY_PATH")
@@ -262,19 +266,25 @@ def send_discord_notification(webhook_url, message_content):
             success = False
     else:
         for i, chunk in enumerate(message_chunks):
-            payload = {"content": chunk}
+            payload = {
+                        "number": SIGNAL_NUMBER,
+                        "message": chunk,
+                        "recipients": [
+                            SIGNAL_GROUP
+                        ]
+                    }
             try:
                 response = requests.post(webhook_url, json=payload, timeout=15)
                 response.raise_for_status()
-                print(f"Discord notification chunk {i+1}/{len(message_chunks)} sent successfully.")
+                print(f"Signal notification chunk {i+1}/{len(message_chunks)} sent successfully.")
                 if i < len(message_chunks) - 1:
                     time.sleep(1) # avoid ratelimit
             except requests.exceptions.RequestException as e:
-                print(f"Error sending Discord notification chunk {i+1}: {e}")
+                print(f"Error sending Signal notification chunk {i+1}: {e}")
                 success = False
                 break
             except Exception as e:
-                print(f"An unexpected error occurred during Discord notification chunk {i+1}: {e}")
+                print(f"An unexpected error occurred during Signal notification chunk {i+1}: {e}")
                 success = False
                 break
 
@@ -617,7 +627,6 @@ def extract_times_for_all_locations_firefox(
 
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Extraction process finished.")
     return raw_location_results
-
 
 
 allowed_locations, filtering_enabled = get_filtered_locations(YOUR_ADDRESS, DISTANCE_RANGE_MILES_STR, LOCATION_DATA_FILE)
