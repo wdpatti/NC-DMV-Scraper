@@ -14,7 +14,3 @@ RUN apt-get update && \
 ENV PYTHONUNBUFFERED=1
 ENV GECKODRIVER_PATH=/usr/local/bin/geckodriver
 CMD ["python", "/app/scrapedmv.py"]
-
-
-
-
