@@ -63,7 +63,7 @@ if GECKODRIVER_PATH == 'YOUR_GECKODRIVER_PATH_HERE':
     print("Please set your geckodriver path in scrapedmv.py. If you do not know how, please look at the readme.")
     exit()
 
-BASE_INTERVAL_MINUTES = float(os.getenv('BASE_INTERVAL_MINUTES', 10))
+BASE_INTERVAL_SECONDS = int(os.getenv('BASE_INTERVAL_SECONDS', 30))
 MIN_RANDOM_DELAY_SECONDS = 5
 MAX_RANDOM_DELAY_SECONDS = 15
 NCDOT_APPOINTMENT_URL = "https://skiptheline.ncdot.gov"
@@ -666,7 +666,7 @@ while True:
         send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, None)
         print("No valid appointment times found in this run.")
 
-    base_sleep = BASE_INTERVAL_MINUTES * 60
+    base_sleep = BASE_INTERVAL_SECONDS
     random_delay = random.randint(MIN_RANDOM_DELAY_SECONDS, MAX_RANDOM_DELAY_SECONDS)
     total_sleep = base_sleep + random_delay
 
