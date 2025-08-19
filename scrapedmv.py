@@ -435,7 +435,7 @@ def extract_times_for_all_locations_firefox(
                     has_hover_div = len(current_button.find_elements(By.CSS_SELECTOR, "div.hover-div")) > 0
                     
                     if not is_displayed or not is_enabled or has_disabled_class or has_hover_div:
-                        print(f"Skipping inactive button at index {index} (displayed={is_displayed}, enabled={is_enabled}, disabled_class={has_disabled_class}, has_hover_div={has_hover_div})")
+                        #print(f"Skipping inactive button at index {index} (displayed={is_displayed}, enabled={is_enabled}, disabled_class={has_disabled_class}, has_hover_div={has_hover_div})")
                         continue
                 except Exception as e:
                     print(f"Warning: Could not check button state for index {index}: {e}. Skipping.")
