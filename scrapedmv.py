@@ -395,7 +395,7 @@ def extract_times_for_all_locations_firefox(
             return {}
 
         location_button_wait = WebDriverWait(driver, 45)
-        second_layer_button_selector = "div.QflowObjectItem.form-control.ui-selectable.valid:not(.disabled-unit):not(:has(> div.hover-div))"
+        second_layer_button_selector = "div.QflowObjectItem.form-control.ui-selectable"
 
         try:
             print("Waiting for location buttons...")
@@ -408,7 +408,7 @@ def extract_times_for_all_locations_firefox(
 
         initial_buttons = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
         num_initial_buttons = len(initial_buttons)
-        print(f"Found {num_initial_buttons} potential location buttons.")
+        print(f"Found {num_initial_buttons} total location buttons (including inactive ones).")
 
         for index in range(num_initial_buttons):
             location_name = f"Unknown Location {index}"
@@ -420,20 +420,26 @@ def extract_times_for_all_locations_firefox(
                 print(f"\n--- Processing location index: {index} ---")
                 WebDriverWait(driver, 15).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
                 location_button_elements = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
-                active_location_buttons_list = []
-                for btn in location_button_elements:
-                    try:
-                         if btn.is_displayed() and btn.is_enabled():
-                             active_location_buttons_list.append(btn)
-                    except Exception:
-                         print(f"Warning: Issue checking state of a button for index {index}, list may be incomplete.")
-                         continue
-
-                if index >= len(active_location_buttons_list):
-                    print(f"Index {index} out of bounds ({len(active_location_buttons_list)} active). Skipping.")
+                
+                if index >= len(location_button_elements):
+                    print(f"Index {index} out of bounds ({len(location_button_elements)} total buttons). Skipping.")
                     continue
 
-                current_button = active_location_buttons_list[index]
+                current_button = location_button_elements[index]
+                
+                # Check if button is active/clickable
+                try:
+                    is_displayed = current_button.is_displayed()
+                    is_enabled = current_button.is_enabled()
+                    has_disabled_class = "disabled-unit" in current_button.get_attribute("class")
+                    has_hover_div = len(current_button.find_elements(By.CSS_SELECTOR, "div.hover-div")) > 0
+                    
+                    if not is_displayed or not is_enabled or has_disabled_class or has_hover_div:
+                        print(f"Skipping inactive button at index {index} (displayed={is_displayed}, enabled={is_enabled}, disabled_class={has_disabled_class}, has_hover_div={has_hover_div})")
+                        continue
+                except Exception as e:
+                    print(f"Warning: Could not check button state for index {index}: {e}. Skipping.")
+                    continue
 
                 try:
                     button_lines = current_button.text.splitlines()
