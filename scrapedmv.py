@@ -615,7 +615,7 @@ def extract_times_for_all_locations_firefox(
                 print(f"Clicking button for: {location_name}")
                 current_button.click()
                 location_processed_successfully = True
-                time.sleep(5)
+                time.sleep(1)
 
                 valid_appointment_datetimes_for_location = []
                 location_status_message = ""
@@ -826,7 +826,7 @@ while True:
             if driver is None:
                 print("Failed to initialize webdriver. Retrying in next run...")
                 driver_restart_needed = True
-                time.sleep(BASE_INTERVAL_SECONDS)
+                time.sleep(5)
                 continue
             driver_restart_needed = False
         
@@ -875,7 +875,8 @@ while True:
 
     print(f"--- Run finished. Sleeping for {total_sleep // 60} minutes and {total_sleep % 60} seconds ---")
     try:
-        time.sleep(total_sleep)
+        #time.sleep(0)
+        pass
     except KeyboardInterrupt:
         print("\nCtrl+C detected. Closing webdriver and exiting script.")
         if driver:
