@@ -329,13 +329,41 @@ def wait_for_options_in_select(driver, locator, timeout=35):
         time.sleep(0.3)
     return None
 
-def initialize_webdriver(driver_path, binary_path):
+def initialize_webdriver(driver_path, binary_path, user_address=None):
     """Initialize and return a new Firefox webdriver instance."""
     try:
         print("Starting Firefox setup...")
         firefox_options = Options()
         firefox_options.add_argument("--headless")
-        firefox_options.set_preference("geo.enabled", False)
+        
+        # Enable geolocation and set Charlotte, NC coordinates if address is provided
+        if user_address:
+            print(f"Setting browser location for address: {user_address}")
+            # Get coordinates for the user's address
+            try:
+                from geopy.geocoders import Nominatim
+                geolocator = Nominatim(user_agent="dmv_appointment_scraper")
+                location = geolocator.geocode(user_address, timeout=10)
+                if location:
+                    lat, lon = location.latitude, location.longitude
+                    print(f"Setting browser coordinates to: {lat}, {lon}")
+                    
+                    # Enable geolocation and set coordinates
+                    firefox_options.set_preference("geo.enabled", True)
+                    firefox_options.set_preference("geo.provider.use_corelocation", False)
+                    firefox_options.set_preference("geo.prompt.testing", True)
+                    firefox_options.set_preference("geo.prompt.testing.allow", True)
+                    # Set the location coordinates
+                    firefox_options.set_preference("geo.provider.network.url", f"data:application/json,{{\"location\": {{\"lat\": {lat}, \"lng\": {lon}}}, \"accuracy\": 27000.0}}")
+                else:
+                    print("Could not geocode address, disabling geolocation")
+                    firefox_options.set_preference("geo.enabled", False)
+            except Exception as e:
+                print(f"Error setting up geolocation: {e}, disabling geolocation")
+                firefox_options.set_preference("geo.enabled", False)
+        else:
+            firefox_options.set_preference("geo.enabled", False)
+            
         if binary_path:
             firefox_options.binary_location = binary_path
         service = FirefoxService(executable_path=driver_path)
@@ -395,7 +423,8 @@ def extract_times_for_all_locations_firefox(
     url, driver_path, binary_path,
     allowed_locations_filter, filtering_active,
     date_filter_enabled, start_date, end_date,
-    time_filter_enabled, start_time, end_time
+    time_filter_enabled, start_time, end_time,
+    user_address=None
 ):
     driver = None
     raw_location_results = {}
@@ -403,26 +432,9 @@ def extract_times_for_all_locations_firefox(
 
     try:
         print(f"[{start_run_time_str}] Starting Firefox setup...")
-        firefox_options = Options()
-        firefox_options.add_argument("--headless")
-        firefox_options.set_preference("geo.enabled", False)
-        if binary_path:
-            firefox_options.binary_location = binary_path
-        service = FirefoxService(executable_path=driver_path)
-
-        try:
-            driver = webdriver.Firefox(service=service, options=firefox_options)
-            driver.implicitly_wait(2)
-            driver.set_page_load_timeout(90)
-            print("Firefox driver initialized.")
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "unable to find binary" in error_msg or \
-               ("message: process unexpectedly closed" in error_msg and binary_path):
-                 print("ERROR: Selenium couldn't find your Firefox installation.")
-                 print("Please ensure Firefox is installed or FIREFOX_BINARY_PATH is set.")
-            else:
-                 print(f"ERROR: Failed to initialize Firefox driver: {e}")
+        
+        driver = initialize_webdriver(driver_path, binary_path, user_address)
+        if driver is None:
             return {}
 
         print(f"Navigating to URL: {url}")
@@ -701,49 +713,27 @@ if YOUR_DISCORD_WEBHOOK_URL == "YOUR_WEBHOOK_URL_HERE":
     print("!!! WARNING: DISCORD WEBHOOK URL IS NOT SET. Notifications will be skipped. !!!")
     print("!!! Edit the YOUR_DISCORD_WEBHOOK_URL variable in the script. !!!")
 
-# Initialize webdriver once
-driver = None
-max_retries = 3
-retry_count = 0
-
 while True:
-    # Initialize or restart webdriver if needed
-    if driver is None:
-        print(f"\n--- Initializing webdriver (attempt {retry_count + 1}/{max_retries}) ---")
-        driver = initialize_webdriver(GECKODRIVER_PATH, FIREFOX_BINARY_PATH)
-        if driver is None:
-            retry_count += 1
-            if retry_count >= max_retries:
-                print("!!! Failed to initialize webdriver after maximum retries. Exiting. !!!")
-                break
-            print(f"Failed to initialize webdriver. Retrying in 30 seconds...")
-            time.sleep(30)
-            continue
-        retry_count = 0  # Reset retry count on successful initialization
-
     print(f"\n--- Starting run at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
 
     try:
         results, success = extract_times_for_all_locations_firefox(
-            driver,
-            NCDOT_APPOINTMENT_URL,
-            allowed_locations, # Distance filter
-            filtering_enabled, # Distance filter flag
-            date_filter,       # Date filter flag
-            dt_start,          # Date filter start
-            dt_end,            # Date filter end
-            time_filter,       # Time filter flag
-            tm_start,          # Time filter start
-            tm_end             # Time filter end
+            NCDOT_APPOINTMENT_URL, # URL
+            GECKODRIVER_PATH,      # Driver path
+            FIREFOX_BINARY_PATH,   # Binary path
+            allowed_locations,     # Distance filter
+            filtering_enabled,     # Distance filter flag
+            date_filter,           # Date filter flag
+            dt_start,              # Date filter start
+            dt_end,                # Date filter end
+            time_filter,           # Time filter flag
+            tm_start,              # Time filter start
+            tm_end,                # Time filter end
+            YOUR_ADDRESS           # User address for geolocation
         )
         
         if not success:
-            print("!!! Error occurred during extraction. Restarting webdriver. !!!")
-            try:
-                driver.quit()
-            except:
-                pass
-            driver = None
+            print("!!! Error occurred during extraction. Will retry in next run. !!!")
             continue
 
         print(results)
@@ -757,12 +747,7 @@ while True:
             print("No valid appointment times found in this run.")
 
     except Exception as e:
-        print(f"!!! Unexpected error in main loop: {e}. Restarting webdriver. !!!")
-        try:
-            driver.quit()
-        except:
-            pass
-        driver = None
+        print(f"!!! Unexpected error in main loop: {e}. Will retry in next run. !!!")
         continue
 
     base_sleep = BASE_INTERVAL_SECONDS
@@ -774,10 +759,4 @@ while True:
         time.sleep(total_sleep)
     except KeyboardInterrupt:
         print("\nCtrl+C detected. Exiting script.")
-        if driver:
-            try:
-                driver.quit()
-                print("Firefox driver quit.")
-            except:
-                pass
         break

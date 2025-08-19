@@ -1,3 +1,6 @@
 venv/
 geckodriver.exe
 geckodriver.zip
+__pycache__/scrapedmv.cpython-312.pyc
+test_geolocation.py
+GEOLOCATION_CHANGES.md
