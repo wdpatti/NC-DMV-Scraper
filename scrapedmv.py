@@ -65,8 +65,8 @@ if GECKODRIVER_PATH == 'YOUR_GECKODRIVER_PATH_HERE':
     exit()
 
 BASE_INTERVAL_SECONDS = int(os.getenv('BASE_INTERVAL_SECONDS', 30))
-MIN_RANDOM_DELAY_SECONDS = 0
-MAX_RANDOM_DELAY_SECONDS = 1
+MIN_RANDOM_DELAY_SECONDS = 1
+MAX_RANDOM_DELAY_SECONDS = 3
 NCDOT_APPOINTMENT_URL = "https://skiptheline.ncdot.gov"
 MAX_DISCORD_MESSAGE_LENGTH = 1950 # Slightly less than 2000 for safety margin
 
@@ -415,7 +415,7 @@ def navigate_to_location_selection(driver, url):
 
         try:
             first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
-            time.sleep(1)
+            time.sleep(2)
             first_layer_button = WebDriverWait(driver, 50).until(
                 EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
             )
@@ -475,7 +475,7 @@ def extract_times_for_all_locations_firefox(
 
         try:
             first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
-            time.sleep(1)
+            time.sleep(2)
             first_layer_button = WebDriverWait(driver, 50).until(
                 EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
             )
@@ -485,7 +485,7 @@ def extract_times_for_all_locations_firefox(
             
             # Wait for the location selection page to load
             print("Waiting for location selection page to load...")
-            time.sleep(1)
+            time.sleep(3)
             
         except (WebDriverException, TimeoutException) as e:
             print(f"ERROR: Could not find or click '{APPOINTMENT_TYPE}' button: {e}. Stopping.")
@@ -615,7 +615,7 @@ def extract_times_for_all_locations_firefox(
                 print(f"Clicking button for: {location_name}")
                 current_button.click()
                 location_processed_successfully = True
-                time.sleep(1)
+                time.sleep(5)
 
                 valid_appointment_datetimes_for_location = []
                 location_status_message = ""
@@ -762,7 +762,7 @@ def extract_times_for_all_locations_firefox(
                     try:
                         print("Navigating back to location list...")
                         driver.back()
-                        time.sleep(0.5)
+                        time.sleep(2.0)
                         print("Waiting for location buttons...")
                         WebDriverWait(driver, 25).until(
                              EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector))
@@ -826,7 +826,7 @@ while True:
             if driver is None:
                 print("Failed to initialize webdriver. Retrying in next run...")
                 driver_restart_needed = True
-                time.sleep(5)
+                time.sleep(BASE_INTERVAL_SECONDS)
                 continue
             driver_restart_needed = False
         
