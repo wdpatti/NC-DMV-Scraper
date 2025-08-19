@@ -4,7 +4,7 @@ from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException, NoSuchElementException
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException, NoSuchElementException, WebDriverException
 import time
 import random
 import requests
@@ -37,8 +37,9 @@ elif os.path.isfile("ncdot_locations_coordinates_only.json"):
 else:
     print("Location data file not set, please set one")
 
-APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Driver License - First Time")
+APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Teen Driver Level 2")
 # APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Motorcycle Skills Test")
+# APPOINTMENT_TYPE = "Motorcycle Skills Test"
 # APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Legal Presence")
 # You could also define:
 # APPOINTMENT_TYPE = "Permits"
@@ -83,6 +84,17 @@ if not FIREFOX_BINARY_PATH and os.path.isfile("C:/Program Files/Mozilla Firefox/
     FIREFOX_BINARY_PATH = "C:/Program Files/Mozilla Firefox/firefox.exe"
 
 # --- End Configuration ---
+
+def is_driver_healthy(driver):
+    """Check if the webdriver is still healthy and responsive."""
+    if driver is None:
+        return False
+    try:
+        # Try to get the current URL to check if driver is responsive
+        driver.current_url
+        return True
+    except (WebDriverException, Exception):
+        return False
 
 def parse_datetime_filters(start_date_str, end_date_str, relative_range_str, start_time_str, end_time_str):
     date_filter_active = False
@@ -420,22 +432,29 @@ def navigate_to_location_selection(driver, url):
         return False
 
 def extract_times_for_all_locations_firefox(
-    url, driver_path, binary_path,
+    url, driver, driver_path, binary_path,
     allowed_locations_filter, filtering_active,
     date_filter_enabled, start_date, end_date,
     time_filter_enabled, start_time, end_time,
     user_address=None
 ):
-    driver = None
     raw_location_results = {}
     start_run_time_str = time.strftime('%Y-%m-%d %H:%M:%S')
 
     try:
-        print(f"[{start_run_time_str}] Starting Firefox setup...")
+        print(f"[{start_run_time_str}] Refreshing page...")
         
-        driver = initialize_webdriver(driver_path, binary_path, user_address)
+        # If driver is None, initialize it
         if driver is None:
-            return {}
+            print("Initializing new webdriver...")
+            driver = initialize_webdriver(driver_path, binary_path, user_address)
+            if driver is None:
+                return {}, False, None
+
+        # Check if driver is still healthy
+        if not is_driver_healthy(driver):
+            print("Driver appears unhealthy, returning for restart...")
+            return {}, False, None
 
         print(f"Navigating to URL: {url}")
         driver.get(url)
@@ -448,10 +467,11 @@ def extract_times_for_all_locations_firefox(
             print("Found 'Make an Appointment' button.")
             make_appointment_button.click()
             print("Clicked 'Make an Appointment' button.")
-        except Exception as e:
+        except (WebDriverException, TimeoutException) as e:
             print(f"ERROR: Could not find or click 'Make an Appointment' button: {e}. Stopping.")
-            if driver: driver.quit()
-            return {}
+            if isinstance(e, WebDriverException):
+                return {}, False, None  # Need driver restart
+            return {}, False, driver
 
         try:
             first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
@@ -462,36 +482,78 @@ def extract_times_for_all_locations_firefox(
             print(f"Found '{APPOINTMENT_TYPE}' button.")
             first_layer_button.click()
             print(f"Clicked '{APPOINTMENT_TYPE}' button.")
-        except Exception as e:
+            
+            # Wait for the location selection page to load
+            print("Waiting for location selection page to load...")
+            time.sleep(3)
+            
+        except (WebDriverException, TimeoutException) as e:
             print(f"ERROR: Could not find or click '{APPOINTMENT_TYPE}' button: {e}. Stopping.")
-            if driver:
-                driver.quit()
-            return {}
+            if isinstance(e, WebDriverException):
+                return {}, False, None  # Need driver restart
+            return {}, False, driver
 
         location_button_wait = WebDriverWait(driver, 45)
+        # Look for actual DMV office location buttons - these should have different structure
         second_layer_button_selector = "div.QflowObjectItem.form-control.ui-selectable"
 
         try:
             print("Waiting for location buttons...")
             location_button_wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
             print("Location buttons are present.")
-        except Exception as e:
+        except (WebDriverException, TimeoutException) as e:
             print(f"ERROR: No location buttons found after clicking appointment type: {e}. Stopping.")
-            if driver: driver.quit()
-            return {}
+            if isinstance(e, WebDriverException):
+                return {}, False, None  # Need driver restart
+            return {}, False, driver
 
         initial_buttons = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
         num_initial_buttons = len(initial_buttons)
         print(f"Found {num_initial_buttons} total location buttons (including inactive ones).")
+        
+        # Quick sanity check - make sure we're on the location selection page
+        if any("Driver License" in btn.text or "Motorcycle" in btn.text or "Teen Driver" in btn.text for btn in initial_buttons[:5]):
+            print("WARNING: Still appears to be on appointment type selection page, not location selection!")
+            print("This suggests the appointment type click didn't navigate to the location page.")
+            return {}, False, driver
 
-        for index in range(num_initial_buttons):
+        # First, quickly identify all available buttons to avoid processing unavailable ones
+        print("Quickly scanning for available locations...")
+        available_button_indices = []
+        WebDriverWait(driver, 15).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
+        location_button_elements = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
+        
+        for index in range(min(num_initial_buttons, len(location_button_elements))):
+            try:
+                current_button = location_button_elements[index]
+                button_class = current_button.get_attribute("class") or ""
+                has_disabled_class = "disabled-unit" in button_class
+                
+                if not has_disabled_class and current_button.is_displayed() and current_button.is_enabled():
+                    available_button_indices.append(index)
+                    # Get location name for quick reference
+                    try:
+                        button_lines = current_button.text.splitlines()
+                        location_name = button_lines[0].strip() if button_lines else f"Location {index}"
+                        print(f"  Available: {location_name} (index {index})")
+                    except:
+                        print(f"  Available: Location {index}")
+            except Exception as e:
+                continue
+        
+        print(f"Found {len(available_button_indices)} available locations out of {num_initial_buttons} total.")
+        if len(available_button_indices) == 0:
+            print("No available locations found - all are currently disabled/unavailable.")
+            return raw_location_results, True, driver
+        
+        # Now process only the available locations
+        for index in available_button_indices:
             location_name = f"Unknown Location {index}"
             location_address_from_site = "Unknown Address"
             location_processed_successfully = False
 
             try:
-                print(raw_location_results)
-                print(f"\n--- Processing location index: {index} ---")
+                print(f"\n--- Processing available location index: {index} ---")
                 WebDriverWait(driver, 15).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
                 location_button_elements = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
                 
@@ -501,33 +563,54 @@ def extract_times_for_all_locations_firefox(
 
                 current_button = location_button_elements[index]
                 
-                # Check if button is active/clickable
+                # Double-check that button is still available (page might have changed)
                 try:
-                    is_displayed = current_button.is_displayed()
-                    is_enabled = current_button.is_enabled()
-                    has_disabled_class = "disabled-unit" in current_button.get_attribute("class")
-                    has_hover_div = len(current_button.find_elements(By.CSS_SELECTOR, "div.hover-div")) > 0
+                    button_class = current_button.get_attribute("class") or ""
+                    has_disabled_class = "disabled-unit" in button_class
                     
-                    if not is_displayed or not is_enabled or has_disabled_class or has_hover_div:
-                        #print(f"Skipping inactive button at index {index} (displayed={is_displayed}, enabled={is_enabled}, disabled_class={has_disabled_class}, has_hover_div={has_hover_div})")
+                    if has_disabled_class or not current_button.is_displayed() or not current_button.is_enabled():
+                        print(f"Location {index} became unavailable since scan. Skipping.")
                         continue
                 except Exception as e:
-                    print(f"Warning: Could not check button state for index {index}: {e}. Skipping.")
+                    print(f"Warning: Could not re-check button state for index {index}: {e}. Skipping.")
                     continue
 
                 try:
+                    button_text = current_button.text
+                    print(f"Button {index} text: '{button_text}'")
+                    
                     button_lines = current_button.text.splitlines()
                     if button_lines:
                         location_name = button_lines[0].strip()
-                    address_element = current_button.find_element(By.CSS_SELECTOR, "div.form-control-child")
-                    location_address_from_site = address_element.text.strip()
+                    else:
+                        location_name = f"Unknown Location {index}"
+                        
+                    try:
+                        address_element = current_button.find_element(By.CSS_SELECTOR, "div.form-control-child")
+                        location_address_from_site = address_element.text.strip()
+                    except NoSuchElementException:
+                        print(f"Could not find address element with 'div.form-control-child' for button {index}")
+                        # Try alternative selectors
+                        try:
+                            address_element = current_button.find_element(By.CSS_SELECTOR, "div[class*='form-control']")
+                            location_address_from_site = address_element.text.strip()
+                            print(f"Found address using alternative selector: '{location_address_from_site}'")
+                        except NoSuchElementException:
+                            location_address_from_site = f"Unknown Address {index}"
+                            print(f"Could not find any address element for button {index}")
+                    
                     print(f"Location: {location_name} ({location_address_from_site})")
                 except Exception as e:
                     print(f"Warning: Could not get name/address for index {index}: {e}")
+                    location_name = f"Unknown Location {index}"
+                    location_address_from_site = f"Unknown Address {index}"
 
                 if filtering_active and location_address_from_site not in allowed_locations_filter:
                     print(f"Skipping {location_name} (Address '{location_address_from_site}' not in allow list)")
-                    continue
+                    # Since locations are sorted by distance, if this one is out of range, 
+                    # all remaining locations will also be out of range
+                    print("Breaking out of location loop - remaining locations will be out of range")
+                    break
 
                 print(f"Clicking button for: {location_name}")
                 current_button.click()
@@ -692,14 +775,23 @@ def extract_times_for_all_locations_firefox(
 
         print("\nFinished processing locations loop.")
 
-    except Exception as e:
+    except (WebDriverException, Exception) as e:
         print(f"\n--- !!! ---")
         print(f"An MAJOR unhandled error occurred outside the location loop: {type(e).__name__} - {e}")
         print(f"--- !!! ---\n")
-        return {}, False  # Return False to indicate need for driver restart
+        # For WebDriverExceptions, we should restart the driver
+        if isinstance(e, WebDriverException):
+            print("WebDriverException detected - driver restart needed")
+            try:
+                if driver:
+                    driver.quit()
+            except:
+                pass
+            return {}, False, None
+        return {}, False, driver  # Return False to indicate need for driver restart
 
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Extraction process finished.")
-    return raw_location_results, True  # Return True to indicate successful run
+    return raw_location_results, True, driver  # Return True to indicate successful run
 
 
 allowed_locations, filtering_enabled = get_filtered_locations(YOUR_ADDRESS, DISTANCE_RANGE_MILES_STR, LOCATION_DATA_FILE)
@@ -713,12 +805,34 @@ if YOUR_DISCORD_WEBHOOK_URL == "YOUR_WEBHOOK_URL_HERE":
     print("!!! WARNING: DISCORD WEBHOOK URL IS NOT SET. Notifications will be skipped. !!!")
     print("!!! Edit the YOUR_DISCORD_WEBHOOK_URL variable in the script. !!!")
 
+# Initialize webdriver once outside the main loop
+driver = None
+driver_restart_needed = True
+
 while True:
     print(f"\n--- Starting run at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
 
     try:
-        results, success = extract_times_for_all_locations_firefox(
+        # Initialize or restart driver if needed
+        if driver_restart_needed or driver is None or not is_driver_healthy(driver):
+            if driver:
+                print("Restarting webdriver...")
+                try:
+                    driver.quit()
+                except:
+                    pass
+                driver = None
+            driver = initialize_webdriver(GECKODRIVER_PATH, FIREFOX_BINARY_PATH, YOUR_ADDRESS)
+            if driver is None:
+                print("Failed to initialize webdriver. Retrying in next run...")
+                driver_restart_needed = True
+                time.sleep(BASE_INTERVAL_SECONDS)
+                continue
+            driver_restart_needed = False
+        
+        results, success, driver = extract_times_for_all_locations_firefox(
             NCDOT_APPOINTMENT_URL, # URL
+            driver,                # Persistent driver
             GECKODRIVER_PATH,      # Driver path
             FIREFOX_BINARY_PATH,   # Binary path
             allowed_locations,     # Distance filter
@@ -733,7 +847,11 @@ while True:
         )
         
         if not success:
-            print("!!! Error occurred during extraction. Will retry in next run. !!!")
+            print("!!! Error occurred during extraction. Will restart driver in next run. !!!")
+            driver_restart_needed = True
+            # If driver was returned as None, we need to restart
+            if driver is None:
+                driver_restart_needed = True
             continue
 
         print(results)
@@ -747,16 +865,22 @@ while True:
             print("No valid appointment times found in this run.")
 
     except Exception as e:
-        print(f"!!! Unexpected error in main loop: {e}. Will retry in next run. !!!")
+        print(f"!!! Unexpected error in main loop: {e}. Will restart driver in next run. !!!")
+        driver_restart_needed = True
         continue
 
-    base_sleep = BASE_INTERVAL_SECONDS
+    #base_sleep = BASE_INTERVAL_SECONDS
     random_delay = random.randint(MIN_RANDOM_DELAY_SECONDS, MAX_RANDOM_DELAY_SECONDS)
-    total_sleep = base_sleep + random_delay
+    total_sleep = random_delay
 
     print(f"--- Run finished. Sleeping for {total_sleep // 60} minutes and {total_sleep % 60} seconds ---")
     try:
         time.sleep(total_sleep)
     except KeyboardInterrupt:
-        print("\nCtrl+C detected. Exiting script.")
+        print("\nCtrl+C detected. Closing webdriver and exiting script.")
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
         break
