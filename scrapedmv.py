@@ -64,8 +64,8 @@ if GECKODRIVER_PATH == 'YOUR_GECKODRIVER_PATH_HERE':
     exit()
 
 BASE_INTERVAL_SECONDS = int(os.getenv('BASE_INTERVAL_SECONDS', 30))
-MIN_RANDOM_DELAY_SECONDS = 5
-MAX_RANDOM_DELAY_SECONDS = 15
+MIN_RANDOM_DELAY_SECONDS = 1
+MAX_RANDOM_DELAY_SECONDS = 3
 NCDOT_APPOINTMENT_URL = "https://skiptheline.ncdot.gov"
 MAX_DISCORD_MESSAGE_LENGTH = 1950 # Slightly less than 2000 for safety margin
 
@@ -328,6 +328,68 @@ def wait_for_options_in_select(driver, locator, timeout=35):
             pass
         time.sleep(0.3)
     return None
+
+def initialize_webdriver(driver_path, binary_path):
+    """Initialize and return a new Firefox webdriver instance."""
+    try:
+        print("Starting Firefox setup...")
+        firefox_options = Options()
+        firefox_options.add_argument("--headless")
+        firefox_options.set_preference("geo.enabled", False)
+        if binary_path:
+            firefox_options.binary_location = binary_path
+        service = FirefoxService(executable_path=driver_path)
+
+        driver = webdriver.Firefox(service=service, options=firefox_options)
+        driver.implicitly_wait(2)
+        driver.set_page_load_timeout(90)
+        print("Firefox driver initialized.")
+        return driver
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "unable to find binary" in error_msg or \
+           ("message: process unexpectedly closed" in error_msg and binary_path):
+             print("ERROR: Selenium couldn't find your Firefox installation.")
+             print("Please ensure Firefox is installed or FIREFOX_BINARY_PATH is set.")
+        else:
+             print(f"ERROR: Failed to initialize Firefox driver: {e}")
+        return None
+
+def navigate_to_location_selection(driver, url):
+    """Navigate to the location selection page. Returns True if successful, False otherwise."""
+    try:
+        print(f"Navigating to URL: {url}")
+        driver.get(url)
+        print("Page loaded.")
+
+        try:
+            make_appointment_button = WebDriverWait(driver, 90).until(
+                EC.presence_of_element_located((By.ID, "cmdMakeAppt"))
+            )
+            print("Found 'Make an Appointment' button.")
+            make_appointment_button.click()
+            print("Clicked 'Make an Appointment' button.")
+        except Exception as e:
+            print(f"ERROR: Could not find or click 'Make an Appointment' button: {e}")
+            return False
+
+        try:
+            first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
+            time.sleep(2)
+            first_layer_button = WebDriverWait(driver, 50).until(
+                EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
+            )
+            print(f"Found '{APPOINTMENT_TYPE}' button.")
+            first_layer_button.click()
+            print(f"Clicked '{APPOINTMENT_TYPE}' button.")
+        except Exception as e:
+            print(f"ERROR: Could not find or click '{APPOINTMENT_TYPE}' button: {e}")
+            return False
+        
+        return True
+    except Exception as e:
+        print(f"ERROR: Failed to navigate to location selection: {e}")
+        return False
 
 def extract_times_for_all_locations_firefox(
     url, driver_path, binary_path,
@@ -622,19 +684,10 @@ def extract_times_for_all_locations_firefox(
         print(f"\n--- !!! ---")
         print(f"An MAJOR unhandled error occurred outside the location loop: {type(e).__name__} - {e}")
         print(f"--- !!! ---\n")
-
-    finally:
-        if driver:
-            try:
-                driver.quit()
-                print("Firefox driver quit.")
-            except Exception as e:
-                print(f"Error quitting driver: {e}")
-        else:
-            print("No active driver to quit.")
+        return {}, False  # Return False to indicate need for driver restart
 
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Extraction process finished.")
-    return raw_location_results
+    return raw_location_results, True  # Return True to indicate successful run
 
 
 allowed_locations, filtering_enabled = get_filtered_locations(YOUR_ADDRESS, DISTANCE_RANGE_MILES_STR, LOCATION_DATA_FILE)
@@ -648,31 +701,69 @@ if YOUR_DISCORD_WEBHOOK_URL == "YOUR_WEBHOOK_URL_HERE":
     print("!!! WARNING: DISCORD WEBHOOK URL IS NOT SET. Notifications will be skipped. !!!")
     print("!!! Edit the YOUR_DISCORD_WEBHOOK_URL variable in the script. !!!")
 
+# Initialize webdriver once
+driver = None
+max_retries = 3
+retry_count = 0
+
 while True:
+    # Initialize or restart webdriver if needed
+    if driver is None:
+        print(f"\n--- Initializing webdriver (attempt {retry_count + 1}/{max_retries}) ---")
+        driver = initialize_webdriver(GECKODRIVER_PATH, FIREFOX_BINARY_PATH)
+        if driver is None:
+            retry_count += 1
+            if retry_count >= max_retries:
+                print("!!! Failed to initialize webdriver after maximum retries. Exiting. !!!")
+                break
+            print(f"Failed to initialize webdriver. Retrying in 30 seconds...")
+            time.sleep(30)
+            continue
+        retry_count = 0  # Reset retry count on successful initialization
+
     print(f"\n--- Starting run at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
 
-    results = extract_times_for_all_locations_firefox(
-        NCDOT_APPOINTMENT_URL,
-        GECKODRIVER_PATH,
-        FIREFOX_BINARY_PATH,
-        allowed_locations, # Distance filter
-        filtering_enabled, # Distance filter flag
-        date_filter,       # Date filter flag
-        dt_start,          # Date filter start
-        dt_end,            # Date filter end
-        time_filter,       # Time filter flag
-        tm_start,          # Time filter start
-        tm_end             # Time filter end
-    )
-    print(results)
+    try:
+        results, success = extract_times_for_all_locations_firefox(
+            driver,
+            NCDOT_APPOINTMENT_URL,
+            allowed_locations, # Distance filter
+            filtering_enabled, # Distance filter flag
+            date_filter,       # Date filter flag
+            dt_start,          # Date filter start
+            dt_end,            # Date filter end
+            time_filter,       # Time filter flag
+            tm_start,          # Time filter start
+            tm_end             # Time filter end
+        )
+        
+        if not success:
+            print("!!! Error occurred during extraction. Restarting webdriver. !!!")
+            try:
+                driver.quit()
+            except:
+                pass
+            driver = None
+            continue
 
-    discord_message_content = format_results_for_discord(results)
-    if discord_message_content:
-        print("Valid appointment times found. Sending notification...")
-        send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, discord_message_content)
-    else:
-        send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, None)
-        print("No valid appointment times found in this run.")
+        print(results)
+
+        discord_message_content = format_results_for_discord(results)
+        if discord_message_content:
+            print("Valid appointment times found. Sending notification...")
+            send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, discord_message_content)
+        else:
+            send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, None)
+            print("No valid appointment times found in this run.")
+
+    except Exception as e:
+        print(f"!!! Unexpected error in main loop: {e}. Restarting webdriver. !!!")
+        try:
+            driver.quit()
+        except:
+            pass
+        driver = None
+        continue
 
     base_sleep = BASE_INTERVAL_SECONDS
     random_delay = random.randint(MIN_RANDOM_DELAY_SECONDS, MAX_RANDOM_DELAY_SECONDS)
@@ -683,4 +774,10 @@ while True:
         time.sleep(total_sleep)
     except KeyboardInterrupt:
         print("\nCtrl+C detected. Exiting script.")
+        if driver:
+            try:
+                driver.quit()
+                print("Firefox driver quit.")
+            except:
+                pass
         break
