@@ -85,6 +85,38 @@ if not FIREFOX_BINARY_PATH and os.path.isfile("C:/Program Files/Mozilla Firefox/
 
 # --- End Configuration ---
 
+def wait_for_overlays_to_disappear(driver, timeout=15):
+    """Wait for any blocking overlays to disappear."""
+    overlay_selectors = [
+        (By.ID, "BlockLoader"),
+        (By.CSS_SELECTOR, "div.blockUI.blockOverlay"),
+        (By.CSS_SELECTOR, "div.BlockLoader")
+    ]
+    
+    for selector_type, selector_value in overlay_selectors:
+        try:
+            WebDriverWait(driver, timeout).until(
+                EC.invisibility_of_element_located((selector_type, selector_value))
+            )
+        except (TimeoutException, NoSuchElementException):
+            # If element doesn't exist or timeout, that's fine
+            pass
+        except Exception as e:
+            print(f"Warning checking overlay {selector_value}: {e}")
+
+def cleanup_driver(driver):
+    """Properly cleanup a webdriver instance to prevent memory leaks."""
+    if driver is not None:
+        try:
+            print("Cleaning up webdriver...")
+            driver.quit()
+            print("Webdriver cleanup successful.")
+        except Exception as e:
+            print(f"Warning during driver cleanup: {e}")
+        finally:
+            # Give the process time to fully terminate
+            time.sleep(1)
+
 def is_driver_healthy(driver):
     """Check if the webdriver is still healthy and responsive."""
     if driver is None:
@@ -416,12 +448,24 @@ def navigate_to_location_selection(driver, url):
         try:
             first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
             time.sleep(2)
+            
+            # Wait for any blocking overlays to disappear
+            wait_for_overlays_to_disappear(driver)
+            
             first_layer_button = WebDriverWait(driver, 50).until(
                 EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
             )
             print(f"Found '{APPOINTMENT_TYPE}' button.")
-            first_layer_button.click()
-            print(f"Clicked '{APPOINTMENT_TYPE}' button.")
+            
+            # Try clicking with JavaScript if regular click fails due to overlay
+            try:
+                first_layer_button.click()
+                print(f"Clicked '{APPOINTMENT_TYPE}' button.")
+            except Exception as click_error:
+                print(f"Regular click failed: {click_error}. Trying JavaScript click...")
+                driver.execute_script("arguments[0].click();", first_layer_button)
+                print(f"JavaScript clicked '{APPOINTMENT_TYPE}' button.")
+                
         except Exception as e:
             print(f"ERROR: Could not find or click '{APPOINTMENT_TYPE}' button: {e}")
             return False
@@ -476,12 +520,23 @@ def extract_times_for_all_locations_firefox(
         try:
             first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
             time.sleep(2)
+            
+            # Wait for any blocking overlays to disappear
+            wait_for_overlays_to_disappear(driver)
+            
             first_layer_button = WebDriverWait(driver, 50).until(
                 EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
             )
             print(f"Found '{APPOINTMENT_TYPE}' button.")
-            first_layer_button.click()
-            print(f"Clicked '{APPOINTMENT_TYPE}' button.")
+            
+            # Try clicking with JavaScript if regular click fails due to overlay
+            try:
+                first_layer_button.click()
+                print(f"Clicked '{APPOINTMENT_TYPE}' button.")
+            except Exception as click_error:
+                print(f"Regular click failed: {click_error}. Trying JavaScript click...")
+                driver.execute_script("arguments[0].click();", first_layer_button)
+                print(f"JavaScript clicked '{APPOINTMENT_TYPE}' button.")
             
             # Wait for the location selection page to load
             print("Waiting for location selection page to load...")
@@ -782,11 +837,7 @@ def extract_times_for_all_locations_firefox(
         # For WebDriverExceptions, we should restart the driver
         if isinstance(e, WebDriverException):
             print("WebDriverException detected - driver restart needed")
-            try:
-                if driver:
-                    driver.quit()
-            except:
-                pass
+            cleanup_driver(driver)
             return {}, False, None
         return {}, False, driver  # Return False to indicate need for driver restart
 
@@ -817,10 +868,7 @@ while True:
         if driver_restart_needed or driver is None or not is_driver_healthy(driver):
             if driver:
                 print("Restarting webdriver...")
-                try:
-                    driver.quit()
-                except:
-                    pass
+                cleanup_driver(driver)
                 driver = None
             driver = initialize_webdriver(GECKODRIVER_PATH, FIREFOX_BINARY_PATH, YOUR_ADDRESS)
             if driver is None:
@@ -879,9 +927,5 @@ while True:
         pass
     except KeyboardInterrupt:
         print("\nCtrl+C detected. Closing webdriver and exiting script.")
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
+        cleanup_driver(driver)
         break
