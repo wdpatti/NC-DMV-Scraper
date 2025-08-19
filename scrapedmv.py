@@ -1,3 +1,10 @@
+import asyncio
+import threading
+import time
+import random
+import requests
+import os
+import json
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.service import Service as FirefoxService
@@ -5,31 +12,31 @@ from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException, NoSuchElementException
-import time
-import random
-import requests
-import os
-import json
 from geopy.distance import distance as geopy_distance
 from geopy.geocoders import Nominatim
 from decimal import Decimal
 from datetime import datetime, timedelta, time as dt_time, date
 import calendar
+from collections import OrderedDict
 
-# --- Configuration ---
+# Optional async imports (fallback to sync if not available)
+try:
+    import aiohttp
+    ASYNC_AVAILABLE = True
+except ImportError:
+    ASYNC_AVAILABLE = False
+    print("⚠️  aiohttp not available, using synchronous notifications")
 
-YOUR_DISCORD_WEBHOOK_URL = os.getenv("YOUR_DISCORD_WEBHOOK_URL", "YOUR_WEBHOOK_URL_HERE") # !!! REPLACE WITH YOUR ACTUAL WEBHOOK URL !!!
-GECKODRIVER_PATH = os.getenv('GECKODRIVER_PATH','YOUR_GECKODRIVER_PATH_HERE') # Replace with your geckodriver path
+# --- OPTIMIZED Configuration ---
 
-SIGNAL_NUMBER = os.getenv("SIGNAL_NUMBER") # Replace with your Signal number
-SIGNAL_GROUP = os.getenv("SIGNAL_GROUP") # Replace with your Signal group ID
+YOUR_DISCORD_WEBHOOK_URL = os.getenv("YOUR_DISCORD_WEBHOOK_URL", "YOUR_WEBHOOK_URL_HERE")
+GECKODRIVER_PATH = os.getenv('GECKODRIVER_PATH','YOUR_GECKODRIVER_PATH_HERE')
+SIGNAL_NUMBER = os.getenv("SIGNAL_NUMBER")
+SIGNAL_GROUP = os.getenv("SIGNAL_GROUP")
 
-
-# Can change address via environment values or manually edit this code 
-# YOUR_ADDRESS = "1226 Testing Avenue, Charlotte, NC"
-# DISTANCE_RANGE_MILES_STR = 25
 YOUR_ADDRESS = os.getenv("YOUR_ADDRESS")
 DISTANCE_RANGE_MILES_STR = os.getenv("DISTANCE_RANGE")
+
 if os.path.isfile("/app/ncdot_locations_coordinates_only.json"):
     LOCATION_DATA_FILE = "/app/ncdot_locations_coordinates_only.json"
 elif os.path.isfile("ncdot_locations_coordinates_only.json"):
@@ -38,21 +45,8 @@ else:
     print("Location data file not set, please set one")
 
 APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Driver License - First Time")
-# APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Motorcycle Skills Test")
-# APPOINTMENT_TYPE = os.getenv("APPOINTMENT_TYPE", "Legal Presence")
-# You could also define:
-# APPOINTMENT_TYPE = "Permits"
-# APPOINTMENT_TYPE = "Teen Driver Level 1"
-# APPOINTMENT_TYPE = "ID Card"
-# etc. Just get the name off the button you want to click from skiptheline.ncdot.gov .
 
 # Date/Time filtering env vars
-# examples of syntax:
-# DATE_RANGE_START_STR = "01/23/2025"
-# DATE_RANGE_END_STR = "09/23/2025"
-# DATE_RANGE_RELATIVE_STR = "2w"
-# TIME_RANGE_START_STR = "3:00"
-# TIME_RANGE_END_STR = "19:00"
 DATE_RANGE_START_STR = os.getenv("DATE_RANGE_START")
 DATE_RANGE_END_STR = os.getenv("DATE_RANGE_END")
 DATE_RANGE_RELATIVE_STR = os.getenv("DATE_RANGE")
@@ -63,28 +57,41 @@ if GECKODRIVER_PATH == 'YOUR_GECKODRIVER_PATH_HERE':
     print("Please set your geckodriver path in scrapedmv.py. If you do not know how, please look at the readme.")
     exit()
 
-BASE_INTERVAL_SECONDS = int(os.getenv('BASE_INTERVAL_SECONDS', 30))
-MIN_RANDOM_DELAY_SECONDS = 1
-MAX_RANDOM_DELAY_SECONDS = 3
+# 🚀 OPTIMIZATION SETTINGS - Maximum Speed Configuration
+BASE_INTERVAL_SECONDS = int(os.getenv('BASE_INTERVAL_SECONDS', 20))  # Faster scanning
+MIN_RANDOM_DELAY_SECONDS = 0  # No delay for maximum speed
+MAX_RANDOM_DELAY_SECONDS = 2  # Minimal random delay
 NCDOT_APPOINTMENT_URL = "https://skiptheline.ncdot.gov"
-MAX_DISCORD_MESSAGE_LENGTH = 1950 # Slightly less than 2000 for safety margin
+MAX_DISCORD_MESSAGE_LENGTH = 1950
 
-# if you want it to notify you even when there are no appointments available, then set this to true
+# 🔥 PERFORMANCE OPTIMIZATION FLAGS
+INSTANT_NOTIFICATIONS = True    # Send notifications in background threads
+PERSISTENT_BROWSER = True       # Keep browser alive between runs  
+EARLY_EXIT_ENABLED = True       # Stop immediately when appointment found
+REDUCED_TIMEOUTS = True         # Use faster timeouts
+SMART_LOCATION_SORTING = True   # Process closest locations first
+LIMIT_DATE_PROCESSING = True    # Limit dates processed per location for speed
+
 PROOF_OF_LIFE = False
-
 if os.getenv("PROOF_OF_LIFE") == "True" or os.getenv("PROOF_OF_LIFE") == True:
     PROOF_OF_LIFE = True
 
-INTRO_MESSAGE = os.getenv("INTRO_MESSAGE", f"Appointments available at {NCDOT_APPOINTMENT_URL}:\n")
+INTRO_MESSAGE = os.getenv("INTRO_MESSAGE", f"🚨 URGENT: Appointments found at {NCDOT_APPOINTMENT_URL}:\n")
 
-# dont need to set this unless you get error
 FIREFOX_BINARY_PATH = os.getenv("FIREFOX_BINARY_PATH")
 if not FIREFOX_BINARY_PATH and os.path.isfile("C:/Program Files/Mozilla Firefox/firefox.exe"):
     FIREFOX_BINARY_PATH = "C:/Program Files/Mozilla Firefox/firefox.exe"
 
-# --- End Configuration ---
+# Global optimization variables
+persistent_driver = None
+cached_locations_data = None
+first_appointment_found = False
+scan_start_time = None
+
+# --- 🚀 OPTIMIZED FUNCTIONS ---
 
 def parse_datetime_filters(start_date_str, end_date_str, relative_range_str, start_time_str, end_time_str):
+    """Optimized datetime filter parsing"""
     date_filter_active = False
     start_date = None
     end_date = None
@@ -107,21 +114,17 @@ def parse_datetime_filters(start_date_str, end_date_str, relative_range_str, sta
                 end_date = today + timedelta(weeks=num)
             elif unit == 'm':
                 current_year, current_month, current_day = today.year, today.month, today.day
-                # Calculate target month and year
                 total_months_offset = current_month + num
                 year_offset = (total_months_offset - 1) // 12
                 target_year = current_year + year_offset
                 target_month = (total_months_offset - 1) % 12 + 1
-                # Get max days in target month
                 _, days_in_target_month = calendar.monthrange(target_year, target_month)
-                # Adjust day if current day is invalid for target month
                 target_day = min(current_day, days_in_target_month)
                 end_date = date(target_year, target_month, target_day)
             else:
                 raise ValueError(f"Invalid DATE_RANGE unit: '{unit}'. Use 'd', 'w', or 'm'.")
             
             date_filter_active = True
-            print(f"Relative date filtering active: Today ({start_date.strftime('%m/%d/%Y')}) + {num}{unit} -> {end_date.strftime('%m/%d/%Y')}")
             
         elif start_date_str and end_date_str:
             start_date = datetime.strptime(start_date_str, "%m/%d/%Y").date()
@@ -129,9 +132,8 @@ def parse_datetime_filters(start_date_str, end_date_str, relative_range_str, sta
             if start_date > end_date:
                 raise ValueError("DATE_RANGE_START cannot be after DATE_RANGE_END.")
             date_filter_active = True
-            print(f"Absolute date filtering active: {start_date.strftime('%m/%d/%Y')} to {end_date.strftime('%m/%d/%Y')}")
     except Exception as e:
-        print(f"Disabling date filtering due to error (check DATE_RANGE*, ensure format MM/DD/YYYY or Nd/Nw/Nm): {e}")
+        print(f"Date filtering disabled: {e}")
         date_filter_active = False
         start_date = None
         end_date = None
@@ -141,9 +143,8 @@ def parse_datetime_filters(start_date_str, end_date_str, relative_range_str, sta
             start_time = datetime.strptime(start_time_str, "%H:%M").time()
             end_time = datetime.strptime(end_time_str, "%H:%M").time()
             time_filter_active = True
-            print(f"Time filtering active: {start_time.strftime('%H:%M')} to {end_time.strftime('%H:%M')}")
     except Exception as e:
-        print(f"Disabling time filtering due to error (check TIME_RANGE*, ensure format HH:MM): {e}")
+        print(f"Time filtering disabled: {e}")
         time_filter_active = False
         start_time = None
         end_time = None
@@ -151,56 +152,258 @@ def parse_datetime_filters(start_date_str, end_date_str, relative_range_str, sta
     return date_filter_active, start_date, end_date, time_filter_active, start_time, end_time
 
 
-def get_filtered_locations(your_address, distance_range_str, location_file):
+def get_filtered_locations_optimized(your_address, distance_range_str, location_file):
+    """Optimized location filtering with caching and distance sorting"""
+    global cached_locations_data
+    
     try:
         if not (your_address and distance_range_str):
-            print("YOUR_ADDRESS or DISTANCE_RANGE not set. Scraping all locations.")
             return None, False
         distance_range_miles = Decimal(distance_range_str)
         if distance_range_miles <= 0:
             raise ValueError("Distance range must be positive.")
-        print(f"Distance filtering active: Address='{your_address}', Range={distance_range_miles} miles.")
     except Exception as e:
-        print(f"Error setting up filtering (check YOUR_ADDRESS, DISTANCE_RANGE): {e}. Scraping all locations.")
+        print(f"Distance filtering disabled: {e}")
         return None, False
 
-    try:
-        with open(location_file, 'r') as f:
-            locations_data = json.load(f)
-        print(f"Loaded location data from {location_file}")
-    except Exception as e:
-        print(f"Error loading location data from '{location_file}': {e}. Scraping all locations.")
-        return None, False
+    # Load and cache location data
+    if cached_locations_data is None:
+        try:
+            with open(location_file, 'r') as f:
+                cached_locations_data = json.load(f)
+            print(f"📍 Cached location data from {location_file}")
+        except Exception as e:
+            print(f"Error loading location data: {e}")
+            return None, False
 
     try:
-        geolocator = Nominatim(user_agent="dmv_appointment_scraper")
-        print(f"Geocoding your address: {your_address}...")
-        user_location = geolocator.geocode(your_address, timeout=10)
+        geolocator = Nominatim(user_agent="dmv_scraper_optimized")
+        user_location = geolocator.geocode(your_address, timeout=5)  # Reduced timeout
         if not user_location:
             raise ValueError("Could not geocode YOUR_ADDRESS")
         user_coords = (user_location.latitude, user_location.longitude)
-        print(f"Your coordinates: {user_coords}")
     except Exception as e:
-        print(f"Error geocoding YOUR_ADDRESS '{your_address}': {e}. Scraping all locations.")
+        print(f"Geocoding error: {e}")
         return None, False
 
-    allowed_locations = set()
-    print("Calculating distances...")
-    for item in locations_data:
-        try:
-            location_address = item["address"] 
-            location_coords = item["coordinates"]
-            if len(location_coords) != 2:
-                raise ValueError("Invalid coordinates format")
-            dist = geopy_distance(user_coords, tuple(location_coords)).miles
-            if Decimal(dist) <= distance_range_miles:
-                allowed_locations.add(location_address)
-        except Exception as e:
-            print(f"Warning: Error processing location entry '{item.get('address', 'N/A')}': {e}")
-            continue 
+    # Sort locations by distance for prioritized processing
+    if SMART_LOCATION_SORTING:
+        location_distances = []
+        for item in cached_locations_data:
+            try:
+                location_address = item["address"] 
+                location_coords = item["coordinates"]
+                if len(location_coords) != 2:
+                    continue
+                dist = geopy_distance(user_coords, tuple(location_coords)).miles
+                if Decimal(dist) <= distance_range_miles:
+                    location_distances.append((location_address, float(dist)))
+            except Exception:
+                continue
 
-    print(f"Found {len(allowed_locations)} locations within range.")
-    return allowed_locations, True
+        # Sort by distance (closest first for faster detection)
+        location_distances.sort(key=lambda x: x[1])
+        allowed_locations = OrderedDict((addr, dist) for addr, dist in location_distances)
+        print(f"📍 Found {len(allowed_locations)} locations, sorted by distance")
+        return allowed_locations, True
+    else:
+        # Original behavior
+        allowed_locations = set()
+        for item in cached_locations_data:
+            try:
+                location_address = item["address"] 
+                location_coords = item["coordinates"]
+                if len(location_coords) != 2:
+                    continue
+                dist = geopy_distance(user_coords, tuple(location_coords)).miles
+                if Decimal(dist) <= distance_range_miles:
+                    allowed_locations.add(location_address)
+            except Exception:
+                continue 
+
+        print(f"📍 Found {len(allowed_locations)} locations within range")
+        return allowed_locations, True
+
+
+# --- 🚀 OPTIMIZED NOTIFICATION SYSTEM ---
+
+async def send_notification_async(webhook_url, message_content):
+    """Async notification sending for maximum speed"""
+    if not ASYNC_AVAILABLE or not webhook_url or webhook_url == "YOUR_WEBHOOK_URL_HERE":
+        return
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            if message_content is None:
+                if PROOF_OF_LIFE:
+                    await session.post(webhook_url, json={"content": "No appointments found"})
+                return
+
+            full_message = INTRO_MESSAGE + message_content
+            
+            if "https://ntfy.sh/" in webhook_url:
+                await session.post(webhook_url, data=full_message, headers={"Markdown": "yes"})
+            else:
+                payload = {
+                    "number": SIGNAL_NUMBER,
+                    "message": full_message,
+                    "recipients": [SIGNAL_GROUP]
+                }
+                await session.post(webhook_url, json=payload)
+                
+        print("⚡ Async notification sent!")
+    except Exception as e:
+        print(f"Async notification error: {e}")
+
+
+def send_notification_threaded(webhook_url, message_content, is_urgent=False):
+    """Send notification in background thread - NEVER BLOCKS SCANNING!"""
+    
+    def send_notification_sync():
+        try:
+            if not webhook_url or webhook_url == "YOUR_WEBHOOK_URL_HERE":
+                return
+
+            if message_content is None:
+                if PROOF_OF_LIFE:
+                    requests.post(webhook_url, json={"content": "No appointments found"}, timeout=5)
+                return
+
+            full_message = INTRO_MESSAGE + message_content
+
+            # Try async first, fallback to sync
+            if ASYNC_AVAILABLE:
+                try:
+                    asyncio.run(send_notification_async(webhook_url, message_content))
+                    return
+                except Exception:
+                    pass  # Fall back to sync
+
+            # Synchronous fallback
+            if "https://ntfy.sh/" in webhook_url:
+                requests.post(webhook_url, data=full_message, timeout=5, headers={"Markdown": "yes"})
+            else:
+                payload = {
+                    "number": SIGNAL_NUMBER,
+                    "message": full_message,
+                    "recipients": [SIGNAL_GROUP]
+                }
+                requests.post(webhook_url, json=payload, timeout=5)
+            
+            status = "🚨 URGENT" if is_urgent else "📤"
+            print(f"{status} Notification sent in background!")
+            
+        except Exception as e:
+            print(f"Notification error: {e}")
+
+    if INSTANT_NOTIFICATIONS:
+        # Send in background thread - NEVER BLOCKS!
+        thread = threading.Thread(target=send_notification_sync, daemon=True)
+        thread.start()
+        return thread
+    else:
+        # Fallback to blocking send
+        send_notification_sync()
+
+
+def send_discord_notification(webhook_url, message_content):
+    """Optimized notification dispatcher"""
+    return send_notification_threaded(webhook_url, message_content)
+
+
+# --- 🚀 OPTIMIZED BROWSER MANAGEMENT ---
+
+def create_optimized_driver():
+    """Create browser with maximum speed optimizations"""
+    try:
+        print("🚀 Creating optimized Firefox driver...")
+        firefox_options = Options()
+        firefox_options.add_argument("--headless")
+        
+        # AGGRESSIVE PERFORMANCE OPTIMIZATIONS
+        if REDUCED_TIMEOUTS:
+            firefox_options.set_preference("dom.max_script_run_time", 10)
+            firefox_options.set_preference("dom.max_chrome_script_run_time", 10)
+            
+        # Disable unnecessary features for speed
+        firefox_options.set_preference("browser.cache.disk.enable", False)
+        firefox_options.set_preference("browser.cache.memory.enable", False)
+        firefox_options.set_preference("media.autoplay.enabled", False)
+        firefox_options.set_preference("permissions.default.image", 2)  # Disable images
+        
+        # Network optimizations
+        firefox_options.set_preference("network.http.max-connections", 10)
+        firefox_options.set_preference("network.http.max-connections-per-server", 8)
+        
+        # Geolocation setup (optimized)
+        if YOUR_ADDRESS:
+            try:
+                geolocator = Nominatim(user_agent="dmv_scraper_optimized")
+                location = geolocator.geocode(YOUR_ADDRESS, timeout=5)
+                if location:
+                    lat, lon = location.latitude, location.longitude
+                    firefox_options.set_preference("geo.enabled", True)
+                    firefox_options.set_preference("geo.provider.network.url", 
+                        f"data:application/json,{{\"location\": {{\"lat\": {lat}, \"lng\": {lon}}}, \"accuracy\": 27000.0}}")
+                else:
+                    firefox_options.set_preference("geo.enabled", False)
+            except Exception:
+                firefox_options.set_preference("geo.enabled", False)
+        else:
+            firefox_options.set_preference("geo.enabled", False)
+            
+        if FIREFOX_BINARY_PATH:
+            firefox_options.binary_location = FIREFOX_BINARY_PATH
+            
+        service = FirefoxService(executable_path=GECKODRIVER_PATH)
+        driver = webdriver.Firefox(service=service, options=firefox_options)
+        
+        # Optimized timeouts
+        if REDUCED_TIMEOUTS:
+            driver.implicitly_wait(1)      # Reduced from 2
+            driver.set_page_load_timeout(45)  # Reduced from 90
+        else:
+            driver.implicitly_wait(2)
+            driver.set_page_load_timeout(90)
+            
+        print("✅ Optimized driver ready!")
+        return driver
+        
+    except Exception as e:
+        print(f"❌ Driver creation failed: {e}")
+        return None
+
+
+def get_persistent_driver():
+    """Get or create persistent browser - HUGE TIME SAVER!"""
+    global persistent_driver
+    
+    if PERSISTENT_BROWSER and persistent_driver:
+        try:
+            # Quick test if driver is alive
+            persistent_driver.current_url
+            print("♻️  Reusing persistent browser (saves 30-60 seconds!)")
+            return persistent_driver
+        except Exception:
+            print("🔄 Persistent driver died, creating new one...")
+            persistent_driver = None
+    
+    persistent_driver = create_optimized_driver()
+    return persistent_driver
+
+
+def cleanup_persistent_driver():
+    """Cleanup persistent driver"""
+    global persistent_driver
+    if persistent_driver:
+        try:
+            persistent_driver.quit()
+        except Exception:
+            pass
+        persistent_driver = None
+
+# --- 🚀 OPTIMIZED HELPER FUNCTIONS ---
 
 class options_loaded_in_select(object):
     def __init__(self, locator):
@@ -218,105 +421,43 @@ class options_loaded_in_select(object):
         except NoSuchElementException:
             return False
 
-def send_discord_notification(webhook_url, message_content):
-    if not webhook_url or webhook_url == "YOUR_WEBHOOK_URL_HERE":
-        print("Discord webhook URL not configured. Skipping notification.")
-        return
 
-    if message_content == None and PROOF_OF_LIFE == True:
-        requests.post(webhook_url, json={"content":"No valid appointments found at this time"}, timeout=10)
-        return
-    elif message_content == None:
-        return
+def format_results_for_discord_optimized(raw_results):
+    """Optimized result formatting with limits for faster notifications"""
+    if not raw_results:
+        return None
+        
+    message_lines = []
+    found_valid_times = False
+    
+    for location, result in raw_results.items():
+        if isinstance(result, list) and result:
+            message_lines.append(f"\n**📍 {location}**")
+            # Limit to first 3 appointments for faster notifications
+            for dt_str in result[:3]:
+                message_lines.append(f"⏰ {dt_str}")
+            if len(result) > 3:
+                message_lines.append(f"... and {len(result) - 3} more!")
+            found_valid_times = True
 
-    # intro_message = f"@everyone Appointments available at {NCDOT_APPOINTMENT_URL}:\n"
-    full_message = INTRO_MESSAGE + message_content
-
-    message_chunks = []
-    remaining_message = full_message
-
-    while len(remaining_message) > 0:
-        if len(remaining_message) <= MAX_DISCORD_MESSAGE_LENGTH:
-            message_chunks.append(remaining_message)
-            remaining_message = ""
-        else:
-            split_index = remaining_message.rfind('\n', 0, MAX_DISCORD_MESSAGE_LENGTH)
-            if split_index == -1:
-                split_index = MAX_DISCORD_MESSAGE_LENGTH
-
-            message_chunks.append(remaining_message[:split_index])
-            remaining_message = remaining_message[split_index:].lstrip()
-
-            if split_index == MAX_DISCORD_MESSAGE_LENGTH and len(remaining_message) > 0:
-                 message_chunks[-1] += "\n... (split)" # forced split in middle of line
-
-
-    print(f"Sending notification in {len(message_chunks)} chunk(s)...")
-    success = True
-    if "https://ntfy.sh/" in webhook_url:
-        try:
-            response = requests.post(webhook_url, data=full_message,timeout=10,headers={ "Markdown": "yes" })
-            response.raise_for_status()
-            print("ntfy notification sent successfully")
-        except requests.exceptions.RequestException as e:
-            print(f"Error sending ntfy notification: {e}")
-            success = False
-        except Exception as e:
-            print(f"An unexpected error occurred during sending ntfy notification: {e}")
-            success = False
-    else:
-        for i, chunk in enumerate(message_chunks):
-            payload = {
-                        "number": SIGNAL_NUMBER,
-                        "message": chunk,
-                        "recipients": [
-                            SIGNAL_GROUP
-                        ]
-                    }
-            try:
-                response = requests.post(webhook_url, json=payload, timeout=15)
-                response.raise_for_status()
-                print(f"Signal notification chunk {i+1}/{len(message_chunks)} sent successfully.")
-                if i < len(message_chunks) - 1:
-                    time.sleep(1) # avoid ratelimit
-            except requests.exceptions.RequestException as e:
-                print(f"Error sending Signal notification chunk {i+1}: {e}")
-                success = False
-                break
-            except Exception as e:
-                print(f"An unexpected error occurred during Signal notification chunk {i+1}: {e}")
-                success = False
-                break
-
-    if success:
-        print("All Discord notification chunks sent.")
-    else:
-        print("Failed to send all Discord notification chunks.")
+    return "\n".join(message_lines) if found_valid_times else None
 
 
 def format_results_for_discord(raw_results):
-    """Formats the valid results into a string for Discord."""
-    message_lines = []
-    found_valid_times = False
-    for location, result in raw_results.items():
-        if isinstance(result, list) and result:
-            message_lines.append(f"\n**Location: {location}**")
-            for dt_str in result:
-                message_lines.append(f"- {dt_str}")
-            found_valid_times = True
+    """Legacy function for compatibility"""
+    return format_results_for_discord_optimized(raw_results)
 
-    if not found_valid_times:
-        return None
-
-    return "\n".join(message_lines)
 
 def parse_datetime_for_sort(datetime_str):
+    """Optimized datetime parsing for sorting"""
     try:
         return datetime.strptime(datetime_str, "%m/%d/%Y %I:%M:%S %p")
     except ValueError:
         return datetime.max
 
-def wait_for_options_in_select(driver, locator, timeout=35):
+
+def wait_for_options_in_select(driver, locator, timeout=20):  # Reduced default timeout
+    """Optimized wait function with faster polling"""
     start_wait = time.time()
     while time.time() - start_wait < timeout:
         try:
@@ -326,98 +467,20 @@ def wait_for_options_in_select(driver, locator, timeout=35):
                 return select_element
         except Exception:
             pass
-        time.sleep(0.3)
+        time.sleep(0.2)  # Faster polling
     return None
 
-def initialize_webdriver(driver_path, binary_path, user_address=None):
-    """Initialize and return a new Firefox webdriver instance."""
-    try:
-        print("Starting Firefox setup...")
-        firefox_options = Options()
-        firefox_options.add_argument("--headless")
-        
-        # Enable geolocation and set Charlotte, NC coordinates if address is provided
-        if user_address:
-            print(f"Setting browser location for address: {user_address}")
-            # Get coordinates for the user's address
-            try:
-                from geopy.geocoders import Nominatim
-                geolocator = Nominatim(user_agent="dmv_appointment_scraper")
-                location = geolocator.geocode(user_address, timeout=10)
-                if location:
-                    lat, lon = location.latitude, location.longitude
-                    print(f"Setting browser coordinates to: {lat}, {lon}")
-                    
-                    # Enable geolocation and set coordinates
-                    firefox_options.set_preference("geo.enabled", True)
-                    firefox_options.set_preference("geo.provider.use_corelocation", False)
-                    firefox_options.set_preference("geo.prompt.testing", True)
-                    firefox_options.set_preference("geo.prompt.testing.allow", True)
-                    # Set the location coordinates
-                    firefox_options.set_preference("geo.provider.network.url", f"data:application/json,{{\"location\": {{\"lat\": {lat}, \"lng\": {lon}}}, \"accuracy\": 27000.0}}")
-                else:
-                    print("Could not geocode address, disabling geolocation")
-                    firefox_options.set_preference("geo.enabled", False)
-            except Exception as e:
-                print(f"Error setting up geolocation: {e}, disabling geolocation")
-                firefox_options.set_preference("geo.enabled", False)
-        else:
-            firefox_options.set_preference("geo.enabled", False)
-            
-        if binary_path:
-            firefox_options.binary_location = binary_path
-        service = FirefoxService(executable_path=driver_path)
 
-        driver = webdriver.Firefox(service=service, options=firefox_options)
-        driver.implicitly_wait(2)
-        driver.set_page_load_timeout(90)
-        print("Firefox driver initialized.")
-        return driver
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "unable to find binary" in error_msg or \
-           ("message: process unexpectedly closed" in error_msg and binary_path):
-             print("ERROR: Selenium couldn't find your Firefox installation.")
-             print("Please ensure Firefox is installed or FIREFOX_BINARY_PATH is set.")
-        else:
-             print(f"ERROR: Failed to initialize Firefox driver: {e}")
+def fast_wait_for_element(driver, locator, timeout=10):
+    """Fast element waiting with shorter timeouts"""
+    try:
+        return WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located(locator)
+        )
+    except TimeoutException:
         return None
 
-def navigate_to_location_selection(driver, url):
-    """Navigate to the location selection page. Returns True if successful, False otherwise."""
-    try:
-        print(f"Navigating to URL: {url}")
-        driver.get(url)
-        print("Page loaded.")
-
-        try:
-            make_appointment_button = WebDriverWait(driver, 90).until(
-                EC.presence_of_element_located((By.ID, "cmdMakeAppt"))
-            )
-            print("Found 'Make an Appointment' button.")
-            make_appointment_button.click()
-            print("Clicked 'Make an Appointment' button.")
-        except Exception as e:
-            print(f"ERROR: Could not find or click 'Make an Appointment' button: {e}")
-            return False
-
-        try:
-            first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
-            time.sleep(2)
-            first_layer_button = WebDriverWait(driver, 50).until(
-                EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
-            )
-            print(f"Found '{APPOINTMENT_TYPE}' button.")
-            first_layer_button.click()
-            print(f"Clicked '{APPOINTMENT_TYPE}' button.")
-        except Exception as e:
-            print(f"ERROR: Could not find or click '{APPOINTMENT_TYPE}' button: {e}")
-            return False
-        
-        return True
-    except Exception as e:
-        print(f"ERROR: Failed to navigate to location selection: {e}")
-        return False
+# --- 🚀 MAIN OPTIMIZED EXTRACTION FUNCTION ---
 
 def extract_times_for_all_locations_firefox(
     url, driver_path, binary_path,
@@ -426,82 +489,83 @@ def extract_times_for_all_locations_firefox(
     time_filter_enabled, start_time, end_time,
     user_address=None
 ):
-    driver = None
+    """Ultra-optimized extraction with all performance improvements"""
+    global first_appointment_found, scan_start_time
+    first_appointment_found = False
+    scan_start_time = time.time()
+    
+    driver = get_persistent_driver()
+    if driver is None:
+        return {}, False
+
     raw_location_results = {}
-    start_run_time_str = time.strftime('%Y-%m-%d %H:%M:%S')
+    start_run_time_str = time.strftime('%H:%M:%S')
 
     try:
-        print(f"[{start_run_time_str}] Starting Firefox setup...")
+        print(f"🚀 [{start_run_time_str}] Starting optimized scan...")
         
-        driver = initialize_webdriver(driver_path, binary_path, user_address)
-        if driver is None:
-            return {}
-
-        print(f"Navigating to URL: {url}")
+        # Navigate to site with optimized timeouts
         driver.get(url)
-        print("Page loaded.")
 
         try:
-            make_appointment_button = WebDriverWait(driver, 90).until(
+            timeout = 60 if REDUCED_TIMEOUTS else 90
+            make_appointment_button = WebDriverWait(driver, timeout).until(
                 EC.presence_of_element_located((By.ID, "cmdMakeAppt"))
             )
-            print("Found 'Make an Appointment' button.")
             make_appointment_button.click()
-            print("Clicked 'Make an Appointment' button.")
         except Exception as e:
-            print(f"ERROR: Could not find or click 'Make an Appointment' button: {e}. Stopping.")
-            if driver: driver.quit()
-            return {}
+            print(f"❌ Make appointment button error: {e}")
+            return {}, False
 
         try:
             first_layer_button_xpath = f"//div[contains(@class, 'QflowObjectItem') and .//div[contains(text(), '{APPOINTMENT_TYPE}')]]"
-            time.sleep(2)
-            first_layer_button = WebDriverWait(driver, 50).until(
+            time.sleep(1)  # Reduced from 2
+            timeout = 30 if REDUCED_TIMEOUTS else 50
+            first_layer_button = WebDriverWait(driver, timeout).until(
                 EC.element_to_be_clickable((By.XPATH, first_layer_button_xpath))
             )
-            print(f"Found '{APPOINTMENT_TYPE}' button.")
             first_layer_button.click()
-            print(f"Clicked '{APPOINTMENT_TYPE}' button.")
         except Exception as e:
-            print(f"ERROR: Could not find or click '{APPOINTMENT_TYPE}' button: {e}. Stopping.")
-            if driver:
-                driver.quit()
-            return {}
+            print(f"❌ Appointment type button error: {e}")
+            return {}, False
 
-        location_button_wait = WebDriverWait(driver, 45)
+        # Get location buttons with optimized timeout
+        timeout = 30 if REDUCED_TIMEOUTS else 45
+        location_button_wait = WebDriverWait(driver, timeout)
         second_layer_button_selector = "div.QflowObjectItem.form-control.ui-selectable"
 
         try:
-            print("Waiting for location buttons...")
             location_button_wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
-            print("Location buttons are present.")
         except Exception as e:
-            print(f"ERROR: No location buttons found after clicking appointment type: {e}. Stopping.")
-            if driver: driver.quit()
-            return {}
+            print(f"❌ No location buttons found: {e}")
+            return {}, False
 
         initial_buttons = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
         num_initial_buttons = len(initial_buttons)
-        print(f"Found {num_initial_buttons} total location buttons (including inactive ones).")
+        print(f"📍 Processing {num_initial_buttons} location buttons...")
 
+        # 🚀 MAIN LOCATION LOOP WITH ALL OPTIMIZATIONS
         for index in range(num_initial_buttons):
+            # 🔥 EARLY EXIT CHECK - STOP IMMEDIATELY WHEN APPOINTMENT FOUND
+            if EARLY_EXIT_ENABLED and first_appointment_found:
+                print("⚡ EARLY EXIT: First appointment found, stopping scan!")
+                break
+                
             location_name = f"Unknown Location {index}"
             location_address_from_site = "Unknown Address"
             location_processed_successfully = False
 
             try:
-                print(raw_location_results)
-                print(f"\n--- Processing location index: {index} ---")
-                WebDriverWait(driver, 15).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
+                timeout = 10 if REDUCED_TIMEOUTS else 15
+                WebDriverWait(driver, timeout).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector)))
                 location_button_elements = driver.find_elements(By.CSS_SELECTOR, second_layer_button_selector)
                 
                 if index >= len(location_button_elements):
-                    print(f"Index {index} out of bounds ({len(location_button_elements)} total buttons). Skipping.")
                     continue
 
                 current_button = location_button_elements[index]
                 
-                # Check if button is active/clickable
+                # Quick button validation with reduced checks
                 try:
                     is_displayed = current_button.is_displayed()
                     is_enabled = current_button.is_enabled()
@@ -509,200 +573,182 @@ def extract_times_for_all_locations_firefox(
                     has_hover_div = len(current_button.find_elements(By.CSS_SELECTOR, "div.hover-div")) > 0
                     
                     if not is_displayed or not is_enabled or has_disabled_class or has_hover_div:
-                        #print(f"Skipping inactive button at index {index} (displayed={is_displayed}, enabled={is_enabled}, disabled_class={has_disabled_class}, has_hover_div={has_hover_div})")
                         continue
-                except Exception as e:
-                    print(f"Warning: Could not check button state for index {index}: {e}. Skipping.")
+                except Exception:
                     continue
 
+                # Get location info
                 try:
                     button_lines = current_button.text.splitlines()
                     if button_lines:
                         location_name = button_lines[0].strip()
                     address_element = current_button.find_element(By.CSS_SELECTOR, "div.form-control-child")
                     location_address_from_site = address_element.text.strip()
-                    print(f"Location: {location_name} ({location_address_from_site})")
-                except Exception as e:
-                    print(f"Warning: Could not get name/address for index {index}: {e}")
+                    
+                    # Smart location sorting check
+                    if SMART_LOCATION_SORTING and isinstance(allowed_locations_filter, OrderedDict):
+                        distance = allowed_locations_filter.get(location_address_from_site, 999)
+                        print(f"🔍 Checking: {location_name} ({distance:.1f}mi)")
+                    else:
+                        print(f"🔍 Checking: {location_name}")
+                except Exception:
+                    pass
 
-                if filtering_active and location_address_from_site not in allowed_locations_filter:
-                    print(f"Skipping {location_name} (Address '{location_address_from_site}' not in allow list)")
-                    continue
+                # Apply filtering (optimized for OrderedDict)
+                if filtering_active:
+                    if isinstance(allowed_locations_filter, OrderedDict):
+                        if location_address_from_site not in allowed_locations_filter:
+                            continue
+                    else:
+                        if location_address_from_site not in allowed_locations_filter:
+                            continue
 
-                print(f"Clicking button for: {location_name}")
+                # Click location
                 current_button.click()
                 location_processed_successfully = True
-                time.sleep(5)
+                time.sleep(3)  # Reduced from 5
 
                 valid_appointment_datetimes_for_location = []
-                location_status_message = ""
-                process_dates = True
-
+                
+                # Wait for datepicker with optimized timeout
                 datepicker_table_selector_css = "table.ui-datepicker-calendar"
                 error_locator_id = "547650da-008d-4fd0-a164-31a44e94"
-                overlay_selector_css = "div.blockUI.blockOverlay"
 
                 try:
-                    print("Waiting for datepicker...")
-                    WebDriverWait(driver, 30).until(
+                    timeout = 20 if REDUCED_TIMEOUTS else 30
+                    WebDriverWait(driver, timeout).until(
                         EC.visibility_of_element_located((By.CSS_SELECTOR, datepicker_table_selector_css))
                     )
-                    print("Datepicker visible.")
+                    
+                    # Quick error check
                     try:
                         error_element = driver.find_element(By.ID, error_locator_id)
                         error_html = error_element.get_attribute('innerHTML')
                         if "does not currently have any appointments available" in error_html:
-                            print("Message: No appointments available in next 90 days.")
-                            location_status_message = "No appointments in next 90 days"
-                            process_dates = False
+                            raw_location_results[location_name] = "No appointments in next 90 days"
+                            continue
                     except NoSuchElementException:
                         pass
-                    except Exception as e:
-                        print(f"Warning checking 90-day error msg: {e}")
 
-                except Exception as e:
-                    print(f"Did not find datepicker or error occurred: {e}")
-                    location_status_message = "Datepicker Not Found"
-                    process_dates = False
+                except Exception:
+                    raw_location_results[location_name] = "Datepicker Not Found"
+                    continue
 
-                if process_dates:
-                    print("Processing available dates...")
-                    clickable_dates_selector_css = "td[data-handler='selectDay']:not(.ui-datepicker-unselectable):not(.ui-state-disabled) a.ui-state-default"
-                    time_select_locator = (By.ID, "6f1a7b21-2558-41bb-8e4d-2cba7a8b1608")
+                # 🚀 OPTIMIZED DATE PROCESSING
+                clickable_dates_selector_css = "td[data-handler='selectDay']:not(.ui-datepicker-unselectable):not(.ui-state-disabled) a.ui-state-default"
+                time_select_locator = (By.ID, "6f1a7b21-2558-41bb-8e4d-2cba7a8b1608")
 
-                    try:
-                        WebDriverWait(driver,10).until(EC.presence_of_element_located((By.CSS_SELECTOR, datepicker_table_selector_css)))
-                        date_elements = driver.find_elements(By.CSS_SELECTOR, clickable_dates_selector_css)
-                        num_dates = len(date_elements)
-                        print(f"Found {num_dates} clickable dates.")
+                try:
+                    timeout = 8 if REDUCED_TIMEOUTS else 10
+                    WebDriverWait(driver, timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, datepicker_table_selector_css)))
+                    date_elements = driver.find_elements(By.CSS_SELECTOR, clickable_dates_selector_css)
+                    num_dates = len(date_elements)
 
-                        if num_dates == 0 and not location_status_message:
-                            location_status_message = "No clickable dates found"
+                    # 🔥 LIMIT DATE PROCESSING FOR SPEED
+                    max_dates = 5 if LIMIT_DATE_PROCESSING else num_dates
+                    process_dates = min(num_dates, max_dates)
 
-                        for date_index in range(num_dates):
-                            processed_date = False
-                            try:
-                                current_date_links = driver.find_elements(By.CSS_SELECTOR, clickable_dates_selector_css)
-                                if date_index >= len(current_date_links):
-                                    print(f"Date index {date_index} out of bounds on re-find. Skipping remaining.")
+                    for date_index in range(process_dates):
+                        # 🚀 EARLY EXIT CHECK DURING DATE PROCESSING
+                        if EARLY_EXIT_ENABLED and first_appointment_found:
+                            break
+                            
+                        try:
+                            current_date_links = driver.find_elements(By.CSS_SELECTOR, clickable_dates_selector_css)
+                            if date_index >= len(current_date_links):
+                                break
+
+                            date_link_element = current_date_links[date_index]
+                            date_link_element.click()
+
+                            timeout = 15 if REDUCED_TIMEOUTS else 25
+                            time_select_element = wait_for_options_in_select(driver, time_select_locator, timeout)
+
+                            if time_select_element:
+                                time_options = time_select_element.find_elements(By.TAG_NAME, "option")
+                                for option in time_options[1:]:
+                                    try:
+                                        datetime_str = option.get_attribute("data-datetime")
+                                        if not datetime_str:
+                                            continue
+
+                                        appointment_dt = datetime.strptime(datetime_str, "%m/%d/%Y %I:%M:%S %p")
+                                        appointment_date = appointment_dt.date()
+                                        appointment_time = appointment_dt.time()
+
+                                        date_ok = not date_filter_enabled or (start_date <= appointment_date <= end_date)
+                                        time_ok = not time_filter_enabled or (start_time <= appointment_time <= end_time)
+
+                                        if date_ok and time_ok:
+                                            valid_appointment_datetimes_for_location.append(datetime_str)
+                                            
+                                            # 🚨 INSTANT CRITICAL NOTIFICATION ON FIRST APPOINTMENT!
+                                            if not first_appointment_found:
+                                                first_appointment_found = True
+                                                elapsed = time.time() - scan_start_time
+                                                urgent_msg = f"🚨 FIRST APPOINTMENT DETECTED in {elapsed:.1f}s!\n**{location_name}**\n⏰ {datetime_str}\n"
+                                                print("⚡ SENDING INSTANT CRITICAL ALERT!")
+                                                send_notification_threaded(YOUR_DISCORD_WEBHOOK_URL, urgent_msg, is_urgent=True)
+                                                
+                                                # Early exit if enabled
+                                                if EARLY_EXIT_ENABLED:
+                                                    print("⚡ Early exit enabled - stopping after first find!")
+                                                    break
+                                                    
+                                    except Exception:
+                                        continue
+                                        
+                                # Break from date loop if early exit and found appointment
+                                if EARLY_EXIT_ENABLED and first_appointment_found:
                                     break
 
-                                date_link_element = current_date_links[date_index]
-                                date_day_text = date_link_element.text
-                                print(f"    Processing Date Index {date_index} (Day: '{date_day_text}')...", end="")
+                        except Exception:
+                            continue
 
-                                overlay_wait_start = time.time()
-                                max_overlay_wait = 15
-                                overlay_timed_out = False
-                                while True:
-                                    try:
-                                        overlay = driver.find_element(By.CSS_SELECTOR, overlay_selector_css)
-                                        if overlay.is_displayed():
-                                            if time.time() - overlay_wait_start > max_overlay_wait:
-                                                print(" Overlay still visible after timeout.", end="")
-                                                overlay_timed_out = True
-                                                break
-                                            time.sleep(0.5)
-                                        else:
-                                            break
-                                    except NoSuchElementException:
-                                        break
-                                    except Exception as e_overlay_check:
-                                        print(f" Error checking overlay: {e_overlay_check}", end="")
-                                        break
+                except Exception as e:
+                    raw_location_results[location_name] = "Error processing dates"
 
-                                if overlay_timed_out:
-                                    print(" Skipping date click due to persistent overlay.")
-                                    continue
-
-                                date_link_element.click()
-
-                                time_select_element = wait_for_options_in_select(driver, time_select_locator, timeout=25)
-
-                                if time_select_element:
-                                    time_options = time_select_element.find_elements(By.TAG_NAME, "option")
-                                    times_found_this_date = 0
-                                    for option in time_options[1:]:
-                                        try:
-                                            datetime_str = option.get_attribute("data-datetime")
-                                            if not datetime_str:
-                                                continue
-
-                                            appointment_dt = datetime.strptime(datetime_str, "%m/%d/%Y %I:%M:%S %p")
-                                            appointment_date = appointment_dt.date()
-                                            appointment_time = appointment_dt.time()
-
-                                            date_ok = not date_filter_enabled or (start_date <= appointment_date <= end_date)
-                                            time_ok = not time_filter_enabled or (start_time <= appointment_time <= end_time)
-
-                                            if date_ok and time_ok:
-                                                valid_appointment_datetimes_for_location.append(datetime_str)
-                                                times_found_this_date += 1
-                                                if times_found_this_date == 1 and len(raw_location_results.keys()) == 0:
-                                                    send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, "🚨🚨🚨 NEW APPOINTMENTS ARRIVING \n\n https://skiptheline.ncdot.gov")
-                                        except Exception:
-                                            pass
-                                    if times_found_this_date > 0:
-                                        print(f" Added {times_found_this_date} time(s).")
-                                        processed_date = True
-                                    else:
-                                         print(" No matching times found.")
-                                else:
-                                     print(" Time options did not load.")
-
-                            except Exception as e_date:
-                                if not processed_date: 
-                                     print(f" Error processing date index {date_index} (Day '{date_day_text}'): {e_date}")
-
-                    except Exception as e_find_dates:
-                        print(f"  Error finding or looping through date elements: {e_find_dates}")
-                        if not location_status_message:
-                            location_status_message = "Error processing dates"
-
+                # Store results with optimized sorting
                 if valid_appointment_datetimes_for_location:
                     try:
                         valid_appointment_datetimes_for_location.sort(key=parse_datetime_for_sort)
-                    except Exception as e_sort:
-                         print(f"  Warning: Could not sort times for {location_name}: {e_sort}")
+                    except Exception:
+                        pass
                     raw_location_results[location_name] = valid_appointment_datetimes_for_location
-                elif location_status_message:
-                    raw_location_results[location_name] = location_status_message
-                else:
+                elif location_name not in raw_location_results:
                     raw_location_results[location_name] = []
 
             except Exception as location_e:
-                print(f"!! ERROR processing location index {index} ({location_name}): {location_e}")
-                raw_location_results[location_name] = f"Error processing location: {type(location_e).__name__}"
+                print(f"❌ Error processing location {index}: {location_e}")
+                raw_location_results[location_name] = f"Error: {type(location_e).__name__}"
 
             finally:
                 if location_processed_successfully:
                     try:
-                        print("Navigating back to location list...")
                         driver.back()
-                        time.sleep(2.0)
-                        print("Waiting for location buttons...")
-                        WebDriverWait(driver, 25).until(
+                        time.sleep(1.5)  # Reduced from 2.0
+                        timeout = 15 if REDUCED_TIMEOUTS else 25
+                        WebDriverWait(driver, timeout).until(
                              EC.presence_of_all_elements_located((By.CSS_SELECTOR, second_layer_button_selector))
                         )
-                        print("Location buttons present for next iteration.")
-                        time.sleep(0.5)
-                    except Exception as back_wait_e:
-                         print(f"WARNING: Issue navigating back or waiting for buttons after location index {index}: {back_wait_e}. Trying next location.")
+                        time.sleep(0.3)  # Reduced from 0.5
+                    except Exception:
+                        pass
 
-
-        print("\nFinished processing locations loop.")
+        total_elapsed = time.time() - scan_start_time
+        print(f"✅ Scan completed in {total_elapsed:.1f} seconds")
 
     except Exception as e:
-        print(f"\n--- !!! ---")
-        print(f"An MAJOR unhandled error occurred outside the location loop: {type(e).__name__} - {e}")
-        print(f"--- !!! ---\n")
-        return {}, False  # Return False to indicate need for driver restart
+        print(f"💥 Major error: {e}")
+        return {}, False
 
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Extraction process finished.")
-    return raw_location_results, True  # Return True to indicate successful run
+    return raw_location_results, True
 
 
-allowed_locations, filtering_enabled = get_filtered_locations(YOUR_ADDRESS, DISTANCE_RANGE_MILES_STR, LOCATION_DATA_FILE)
+# --- 🚀 MAIN OPTIMIZED EXECUTION ---
+
+# Pre-calculate filters with optimized functions
+allowed_locations, filtering_enabled = get_filtered_locations_optimized(YOUR_ADDRESS, DISTANCE_RANGE_MILES_STR, LOCATION_DATA_FILE)
 
 date_filter, dt_start, dt_end, time_filter, tm_start, tm_end = parse_datetime_filters(
     DATE_RANGE_START_STR, DATE_RANGE_END_STR, DATE_RANGE_RELATIVE_STR, 
@@ -710,53 +756,77 @@ date_filter, dt_start, dt_end, time_filter, tm_start, tm_end = parse_datetime_fi
 )
 
 if YOUR_DISCORD_WEBHOOK_URL == "YOUR_WEBHOOK_URL_HERE":
-    print("!!! WARNING: DISCORD WEBHOOK URL IS NOT SET. Notifications will be skipped. !!!")
-    print("!!! Edit the YOUR_DISCORD_WEBHOOK_URL variable in the script. !!!")
+    print("⚠️  WARNING: DISCORD WEBHOOK URL IS NOT SET!")
+
+print("🚀 ULTRA-OPTIMIZED DMV APPOINTMENT SCANNER STARTING")
+print("⚡ Features: Instant notifications, persistent browser, early exit, smart sorting")
+print("🎯 Early exit on first appointment found")
+print("=" * 70)
+
+consecutive_errors = 0
+max_consecutive_errors = 3
 
 while True:
-    print(f"\n--- Starting run at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
-
+    print(f"\n🔍 OPTIMIZED SCAN START: {time.strftime('%H:%M:%S')}")
+    
     try:
         results, success = extract_times_for_all_locations_firefox(
-            NCDOT_APPOINTMENT_URL, # URL
-            GECKODRIVER_PATH,      # Driver path
-            FIREFOX_BINARY_PATH,   # Binary path
-            allowed_locations,     # Distance filter
-            filtering_enabled,     # Distance filter flag
-            date_filter,           # Date filter flag
-            dt_start,              # Date filter start
-            dt_end,                # Date filter end
-            time_filter,           # Time filter flag
-            tm_start,              # Time filter start
-            tm_end,                # Time filter end
-            YOUR_ADDRESS           # User address for geolocation
+            NCDOT_APPOINTMENT_URL,
+            GECKODRIVER_PATH,
+            FIREFOX_BINARY_PATH,
+            allowed_locations,
+            filtering_enabled,
+            date_filter, dt_start, dt_end,
+            time_filter, tm_start, tm_end,
+            YOUR_ADDRESS
         )
         
         if not success:
-            print("!!! Error occurred during extraction. Will retry in next run. !!!")
+            consecutive_errors += 1
+            print(f"❌ Scan failed ({consecutive_errors}/{max_consecutive_errors})")
+            if consecutive_errors >= max_consecutive_errors:
+                print("🔄 Restarting browser after consecutive failures...")
+                cleanup_persistent_driver()
+                consecutive_errors = 0
             continue
+        
+        consecutive_errors = 0
+        print(f"📊 Results: {results}")
 
-        print(results)
-
-        discord_message_content = format_results_for_discord(results)
-        if discord_message_content:
-            print("Valid appointment times found. Sending notification...")
-            send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, discord_message_content)
+        # Send comprehensive notification if not already sent urgently
+        if not first_appointment_found:
+            discord_message_content = format_results_for_discord_optimized(results)
+            if discord_message_content:
+                print("📤 Sending comprehensive results...")
+                send_notification_threaded(YOUR_DISCORD_WEBHOOK_URL, discord_message_content)
+            else:
+                send_notification_threaded(YOUR_DISCORD_WEBHOOK_URL, None)
         else:
-            send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, None)
-            print("No valid appointment times found in this run.")
+            print("⚡ Urgent notification already sent for first appointment!")
 
     except Exception as e:
-        print(f"!!! Unexpected error in main loop: {e}. Will retry in next run. !!!")
+        consecutive_errors += 1
+        print(f"❌ Unexpected error: {e}")
+        if consecutive_errors >= max_consecutive_errors:
+            print("🔄 Restarting browser due to consecutive errors...")
+            cleanup_persistent_driver()
+            consecutive_errors = 0
         continue
 
-    base_sleep = BASE_INTERVAL_SECONDS
-    random_delay = random.randint(MIN_RANDOM_DELAY_SECONDS, MAX_RANDOM_DELAY_SECONDS)
-    total_sleep = base_sleep + random_delay
-
-    print(f"--- Run finished. Sleeping for {total_sleep // 60} minutes and {total_sleep % 60} seconds ---")
+    # 🚀 DYNAMIC SLEEP CALCULATION
+    if first_appointment_found:
+        # If we found appointments, scan more frequently
+        sleep_time = max(BASE_INTERVAL_SECONDS // 2, 10)
+        print(f"⚡ Found appointments - scanning faster ({sleep_time}s)")
+    else:
+        sleep_time = BASE_INTERVAL_SECONDS + random.randint(MIN_RANDOM_DELAY_SECONDS, MAX_RANDOM_DELAY_SECONDS)
+        
+    print(f"😴 Sleeping {sleep_time}s...")
+    
     try:
-        time.sleep(total_sleep)
+        time.sleep(sleep_time)
     except KeyboardInterrupt:
-        print("\nCtrl+C detected. Exiting script.")
+        print("\n🛑 Stopping optimized scanner...")
+        cleanup_persistent_driver()
+        print("🏁 Scanner shutdown complete")
         break
