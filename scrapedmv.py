@@ -777,7 +777,7 @@ def extract_times_for_all_locations_firefox(
                                                 valid_appointment_datetimes_for_location.append(datetime_str)
                                                 times_found_this_date += 1
                                                 if times_found_this_date == 1 and len(raw_location_results.keys()) == 0:
-                                                    send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, "🚨🚨🚨 NEW APPOINTMENTS ARRIVING \n\n https://skiptheline.ncdot.gov")
+                                                    send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, "🚨🚨🚨 NEW APPOINTMENTS ARRIVING - Next message will contain times")
                                         except Exception:
                                             pass
                                     if times_found_this_date > 0:
