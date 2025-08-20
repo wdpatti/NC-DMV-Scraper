@@ -15,6 +15,7 @@ from geopy.geocoders import Nominatim
 from decimal import Decimal
 from datetime import datetime, timedelta, time as dt_time, date
 import calendar
+import hashlib
 
 # --- Configuration ---
 
@@ -23,6 +24,10 @@ GECKODRIVER_PATH = os.getenv('GECKODRIVER_PATH','YOUR_GECKODRIVER_PATH_HERE') # 
 
 SIGNAL_NUMBER = os.getenv("SIGNAL_NUMBER") # Replace with your Signal number
 SIGNAL_GROUP = os.getenv("SIGNAL_GROUP") # Replace with your Signal group ID
+
+# Notification throttling - track recent notifications to prevent spam
+NOTIFICATION_THROTTLE_MINUTES = 10  # Don't send duplicate notifications within this window
+recent_notifications = {}  # Dictionary to track recent notifications
 
 
 # Can change address via environment values or manually edit this code 
@@ -103,6 +108,72 @@ def wait_for_overlays_to_disappear(driver, timeout=15):
             pass
         except Exception as e:
             print(f"Warning checking overlay {selector_value}: {e}")
+
+def cleanup_old_notifications():
+    """Remove notifications older than the throttle window."""
+    current_time = datetime.now()
+    cutoff_time = current_time - timedelta(minutes=NOTIFICATION_THROTTLE_MINUTES)
+    
+    # Remove old entries
+    keys_to_remove = []
+    for notification_hash, timestamp in recent_notifications.items():
+        if timestamp < cutoff_time:
+            keys_to_remove.append(notification_hash)
+    
+    for key in keys_to_remove:
+        del recent_notifications[key]
+    
+    if keys_to_remove:
+        print(f"Cleaned up {len(keys_to_remove)} old notification entries")
+
+def create_notification_hash(location_name, datetime_str):
+    """Create a unique hash for a specific appointment to track notifications."""
+    # Combine location and datetime to create a unique identifier
+    combined_string = f"{location_name}|{datetime_str}"
+    return hashlib.md5(combined_string.encode()).hexdigest()
+
+def should_send_notification(location_name, datetime_str):
+    """Check if we should send a notification for this appointment."""
+    cleanup_old_notifications()
+    
+    notification_hash = create_notification_hash(location_name, datetime_str)
+    current_time = datetime.now()
+    
+    # Check if we've already sent a notification for this appointment recently
+    if notification_hash in recent_notifications:
+        last_sent = recent_notifications[notification_hash]
+        time_since_last = current_time - last_sent
+        
+        if time_since_last < timedelta(minutes=NOTIFICATION_THROTTLE_MINUTES):
+            minutes_remaining = NOTIFICATION_THROTTLE_MINUTES - (time_since_last.total_seconds() / 60)
+            print(f"Skipping notification for {location_name} at {datetime_str} - last sent {time_since_last.total_seconds():.1f}s ago (throttled for {minutes_remaining:.1f} more minutes)")
+            return False
+    
+    # Record this notification
+    recent_notifications[notification_hash] = current_time
+    return True
+
+def filter_new_appointments(raw_results):
+    """Filter results to only include appointments that haven't been notified about recently."""
+    filtered_results = {}
+    
+    for location, result in raw_results.items():
+        if isinstance(result, list) and result:
+            # Filter out appointments that were recently notified
+            new_appointments = []
+            for datetime_str in result:
+                if should_send_notification(location, datetime_str):
+                    new_appointments.append(datetime_str)
+            
+            if new_appointments:
+                filtered_results[location] = new_appointments
+                print(f"Location {location}: {len(new_appointments)} new appointments (filtered from {len(result)} total)")
+            else:
+                print(f"Location {location}: No new appointments to notify about ({len(result)} total already notified recently)")
+        elif result:  # Handle error messages or other non-list results
+            filtered_results[location] = result
+    
+    return filtered_results
 
 def cleanup_driver(driver):
     """Properly cleanup a webdriver instance to prevent memory leaks."""
@@ -776,20 +847,25 @@ def extract_times_for_all_locations_firefox(
                                             if date_ok and time_ok:
                                                 valid_appointment_datetimes_for_location.append(datetime_str)
                                                 times_found_this_date += 1
+                                                # Only send immediate notification for the very first new appointment found
                                                 if times_found_this_date == 1 and len(raw_location_results.keys()) == 0:
-                                                    # Format the first appointment in a readable way
-                                                    try:
-                                                        # Parse and reformat the datetime string for better readability
-                                                        dt_obj = datetime.strptime(datetime_str, "%m/%d/%Y %I:%M:%S %p")
-                                                        pretty_date = dt_obj.strftime("%A, %B %d, %Y")  # e.g., "Monday, January 15, 2025"
-                                                        pretty_time = dt_obj.strftime("%I:%M %p")       # e.g., "2:30 PM"
-                                                        pretty_datetime = f"{pretty_date} at {pretty_time}"
-                                                    except:
-                                                        # Fallback to original format if parsing fails
-                                                        pretty_datetime = datetime_str
-                                                    
-                                                    first_appointment_message = f"🚨🚨🚨 NEW APPOINTMENTS ARRIVING!\n\n**First Available:**\n📍 **Location:** {location_name}\n📅 **Date & Time:** {pretty_datetime}\n🏢 **Address:** {location_address_from_site}\n\n*More appointments may be available - check next message for full list*"
-                                                    send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, first_appointment_message)
+                                                    # Check if this specific appointment should trigger an immediate notification
+                                                    if should_send_notification(location_name, datetime_str):
+                                                        # Format the first appointment in a readable way
+                                                        try:
+                                                            # Parse and reformat the datetime string for better readability
+                                                            dt_obj = datetime.strptime(datetime_str, "%m/%d/%Y %I:%M:%S %p")
+                                                            pretty_date = dt_obj.strftime("%A, %B %d, %Y")  # e.g., "Monday, January 15, 2025"
+                                                            pretty_time = dt_obj.strftime("%I:%M %p")       # e.g., "2:30 PM"
+                                                            pretty_datetime = f"{pretty_date} at {pretty_time}"
+                                                        except:
+                                                            # Fallback to original format if parsing fails
+                                                            pretty_datetime = datetime_str
+                                                        
+                                                        first_appointment_message = f"🚨🚨🚨 NEW APPOINTMENTS ARRIVING!\n\n**First Available:**\n📍 **Location:** {location_name}\n📅 **Date & Time:** {pretty_datetime}\n🏢 **Address:** {location_address_from_site}\n\n*More appointments may be available - check next message for full list*"
+                                                        send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, first_appointment_message)
+                                                    else:
+                                                        print(f"Skipping immediate notification for first appointment (recently notified)")
                                         except Exception:
                                             pass
                                     if times_found_this_date > 0:
@@ -916,13 +992,21 @@ while True:
 
         print(results)
 
-        discord_message_content = format_results_for_discord(results)
+        # Filter out appointments that have been notified about recently
+        filtered_results = filter_new_appointments(results)
+        
+        discord_message_content = format_results_for_discord(filtered_results)
         if discord_message_content:
-            print("Valid appointment times found. Sending notification...")
+            print("New appointment times found (after filtering). Sending notification...")
             send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, discord_message_content)
         else:
-            send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, None)
-            print("No valid appointment times found in this run.")
+            # Check if we had results but they were all filtered out
+            original_message_content = format_results_for_discord(results)
+            if original_message_content:
+                print("Appointments found but all were recently notified about - no new notification sent.")
+            else:
+                send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, None)
+                print("No valid appointment times found in this run.")
 
     except Exception as e:
         print(f"!!! Unexpected error in main loop: {e}. Will restart driver in next run. !!!")
