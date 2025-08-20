@@ -1,0 +1,8 @@
+.gitignore
+beta_requests_scrape.py
+deploy.sh
+exampleoutput.png
+fetch_appointments.sh
+LICENSE.md
+oldscrape.py.bak
+README.md
