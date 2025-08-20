@@ -777,7 +777,19 @@ def extract_times_for_all_locations_firefox(
                                                 valid_appointment_datetimes_for_location.append(datetime_str)
                                                 times_found_this_date += 1
                                                 if times_found_this_date == 1 and len(raw_location_results.keys()) == 0:
-                                                    send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, "🚨🚨🚨 NEW APPOINTMENTS ARRIVING - Next message will contain times")
+                                                    # Format the first appointment in a readable way
+                                                    try:
+                                                        # Parse and reformat the datetime string for better readability
+                                                        dt_obj = datetime.strptime(datetime_str, "%m/%d/%Y %I:%M:%S %p")
+                                                        pretty_date = dt_obj.strftime("%A, %B %d, %Y")  # e.g., "Monday, January 15, 2025"
+                                                        pretty_time = dt_obj.strftime("%I:%M %p")       # e.g., "2:30 PM"
+                                                        pretty_datetime = f"{pretty_date} at {pretty_time}"
+                                                    except:
+                                                        # Fallback to original format if parsing fails
+                                                        pretty_datetime = datetime_str
+                                                    
+                                                    first_appointment_message = f"🚨🚨🚨 NEW APPOINTMENTS ARRIVING!\n\n**First Available:**\n📍 **Location:** {location_name}\n📅 **Date & Time:** {pretty_datetime}\n🏢 **Address:** {location_address_from_site}\n\n*More appointments may be available - check next message for full list*"
+                                                    send_discord_notification(YOUR_DISCORD_WEBHOOK_URL, first_appointment_message)
                                         except Exception:
                                             pass
                                     if times_found_this_date > 0:
